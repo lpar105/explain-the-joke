@@ -1,8 +1,30 @@
 {
-  "devDependencies": {
-    "@ai-hero/sandcastle": "^0.5.10"
-  },
+  "name": "tight-five",
+  "version": "0.1.0",
+  "private": true,
   "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint",
     "sandcastle": "npx tsx .sandcastle/main.mts"
+  },
+  "dependencies": {
+    "@clerk/nextjs": "^7.3.4",
+    "convex": "^1.39.1",
+    "next": "16.2.6",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@ai-hero/sandcastle": "^0.5.10",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20.19.41",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "16.2.6",
+    "tailwindcss": "^4",
+    "typescript": "^5"
   }
 }
