@@ -228,7 +228,7 @@ function LibrarySetCard({
         size="icon"
         variant="outline"
         onClick={onManage}
-        className="absolute right-2 top-2 z-10 md:opacity-0 md:group-hover:opacity-100"
+        className="absolute right-2 top-2 z-10 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 md:focus-visible:opacity-100"
         aria-label={`Manage ${set.title}`}
       >
         <PencilLine className="size-4" />
