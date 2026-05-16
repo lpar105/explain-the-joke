@@ -45,4 +45,3 @@ next-env.d.ts
 .sandcastle/.env
 .sandcastle/logs/
 .sandcastle/worktrees/
-node_modules/

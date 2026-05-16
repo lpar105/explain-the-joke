@@ -30,7 +30,7 @@ The baseline mood is "production console on warm paper."
 
 ## Color System
 
-These tokens are defined in [app/globals.css](/C:/Users/User/Documents/repos/tight-five/app/globals.css).
+These tokens are defined in [app/globals.css](app/globals.css).
 
 | Token | Value | Use |
 | --- | --- | --- |
@@ -215,7 +215,7 @@ This means layouts like:
 
 ## Tailwind Usage
 
-Reusable Tight Five utilities have been added to [app/globals.css](/C:/Users/User/Documents/repos/tight-five/app/globals.css):
+Reusable Tight Five utilities have been added to [app/globals.css](app/globals.css):
 
 - `bg-tf-paper`
 - `bg-tf-paper-alt`

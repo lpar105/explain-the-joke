@@ -24,6 +24,8 @@ export const listForViewer = query({
         const breakdown = set.currentBreakdownId
           ? await ctx.db.get(set.currentBreakdownId)
           : null;
+        const currentBreakdown =
+          breakdown !== null && breakdown.setId === set._id ? breakdown : null;
 
         return {
           _id: set._id,
@@ -33,12 +35,12 @@ export const listForViewer = query({
           title: set.title,
           trimRangeEndSeconds: set.trimRangeEndSeconds,
           trimRangeStartSeconds: set.trimRangeStartSeconds,
-          breakdown: breakdown
+          breakdown: currentBreakdown
             ? {
-              _id: breakdown._id,
-              editability: breakdown.editability,
-              laughSeedingState: breakdown.laughSeedingState,
-              lineSeedingState: breakdown.lineSeedingState,
+              _id: currentBreakdown._id,
+              editability: currentBreakdown.editability,
+              laughSeedingState: currentBreakdown.laughSeedingState,
+              lineSeedingState: currentBreakdown.lineSeedingState,
             }
             : null,
         };
@@ -66,6 +68,8 @@ export const getForViewer = query({
     const breakdown = set.currentBreakdownId
       ? await ctx.db.get(set.currentBreakdownId)
       : null;
+    const currentBreakdown =
+      breakdown !== null && breakdown.setId === set._id ? breakdown : null;
 
     return {
       _id: set._id,
@@ -75,14 +79,14 @@ export const getForViewer = query({
       title: set.title,
       trimRangeEndSeconds: set.trimRangeEndSeconds,
       trimRangeStartSeconds: set.trimRangeStartSeconds,
-      breakdown: breakdown
+      breakdown: currentBreakdown
         ? {
-          _id: breakdown._id,
-          editability: breakdown.editability,
-          laughFailureReason: breakdown.laughFailureReason ?? null,
-          laughSeedingState: breakdown.laughSeedingState,
-          lineFailureReason: breakdown.lineFailureReason ?? null,
-          lineSeedingState: breakdown.lineSeedingState,
+          _id: currentBreakdown._id,
+          editability: currentBreakdown.editability,
+          laughFailureReason: currentBreakdown.laughFailureReason ?? null,
+          laughSeedingState: currentBreakdown.laughSeedingState,
+          lineFailureReason: currentBreakdown.lineFailureReason ?? null,
+          lineSeedingState: currentBreakdown.lineSeedingState,
         }
         : null,
     };

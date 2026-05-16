@@ -5,7 +5,7 @@ import { Authenticated, AuthLoading, Unauthenticated, useMutation, useQuery } fr
 import { LoaderCircle, PencilLine, Plus } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { api } from '../../convex/_generated/api'
 import { Button } from '../../components/ui/button'
@@ -185,7 +185,11 @@ function LibraryGrid() {
         ))}
       </div>
 
-      <ManageSetDialog set={activeSet} onOpenChange={(open) => !open && setEditingSetId(null)} />
+      <ManageSetDialog
+        key={activeSet?._id ?? 'closed'}
+        set={activeSet}
+        onOpenChange={(open) => !open && setEditingSetId(null)}
+      />
     </>
   )
 }
@@ -328,15 +332,9 @@ function ManageSetDialog({
   onOpenChange: (open: boolean) => void
 }) {
   const renameSet = useMutation(api.sets.rename)
-  const [draftTitle, setDraftTitle] = useState('')
+  const [draftTitle, setDraftTitle] = useState(() => set?.title ?? '')
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
-
-  useEffect(() => {
-    setDraftTitle(set?.title ?? '')
-    setErrorMessage(null)
-    setIsSaving(false)
-  }, [set])
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
