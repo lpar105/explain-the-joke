@@ -1,26 +1,77 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #faf8f5;
+  --foreground: #1a1a1a;
+  --tf-paper: #faf8f5;
+  --tf-paper-alt: #f0ede8;
+  --tf-ink: #1a1a1a;
+  --tf-ink-soft: #444444;
+  --tf-ink-muted: #888888;
+  --tf-accent-red: #c41e3a;
+  --tf-accent-red-hover: #d63a52;
+  --tf-accent-blue: #1a3a52;
+  --tf-accent-blue-hover: #2a4a62;
+  --tf-white: #ffffff;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-tf-paper: var(--tf-paper);
+  --color-tf-paper-alt: var(--tf-paper-alt);
+  --color-tf-ink: var(--tf-ink);
+  --color-tf-ink-soft: var(--tf-ink-soft);
+  --color-tf-ink-muted: var(--tf-ink-muted);
+  --color-tf-red: var(--tf-accent-red);
+  --color-tf-red-hover: var(--tf-accent-red-hover);
+  --color-tf-blue: var(--tf-accent-blue);
+  --color-tf-blue-hover: var(--tf-accent-blue-hover);
+  --color-tf-white: var(--tf-white);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+@utility border-tf {
+  border: 2px solid var(--tf-ink);
+}
+
+@utility border-tf-subtle {
+  border: 1px solid var(--tf-ink);
+}
+
+@utility shadow-tf-card {
+  box-shadow: 4px 4px 0 0 var(--tf-ink);
+}
+
+@utility shadow-tf-active {
+  box-shadow: 2px 2px 0 0 var(--tf-accent-red);
+}
+
+@utility tracking-tf-ui {
+  letter-spacing: 0.18em;
+}
+
+@utility tracking-tf-tight {
+  letter-spacing: -0.04em;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), sans-serif;
+}
+
+a,
+button,
+input {
+  transition-duration: 120ms;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
 }
