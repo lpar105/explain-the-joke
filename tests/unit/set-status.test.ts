@@ -4,7 +4,7 @@ import {
   getBreakdownBadgeLabel,
   getBreakdownSummary,
   getSetStatusLabel,
-} from "../lib/set-status";
+} from "../../lib/set-status";
 
 describe("set status helpers", () => {
   it("formats the current set status label", () => {

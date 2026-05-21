@@ -4,10 +4,11 @@ import { SignInButton, SignUpButton } from '@clerk/nextjs'
 import { Authenticated, AuthLoading, Unauthenticated, useMutation, useQuery } from 'convex/react'
 import { LoaderCircle, PencilLine, Plus } from 'lucide-react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { useMemo, useState } from 'react'
 
 import { api } from '../../convex/_generated/api'
+import { getAppErrorCodeFromConvexError, getErrorMessageForCode } from '../../lib/errors'
+import UploadSetDialog from '../../components/library/upload-set-dialog'
 import { Button } from '../../components/ui/button'
 import {
   Dialog,
@@ -15,15 +16,11 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '../../components/ui/dialog'
 import { Input } from '../../components/ui/input'
 import {
   formatCreationDate,
   formatDuration,
-  getBreakdownBadgeLabel,
-  getBreakdownSummary,
-  getSetStatusLabel,
 } from '../../lib/set-status'
 
 export default function LibraryPage() {
@@ -77,72 +74,6 @@ export default function LibraryPage() {
         </section>
       </div>
     </main>
-  )
-}
-
-function UploadSetDialog() {
-  const router = useRouter()
-  const [open, setOpen] = useState(false)
-  const [title, setTitle] = useState('')
-
-  function continueToTrimRange() {
-    const params = new URLSearchParams()
-    if (title.trim()) {
-      params.set('title', title.trim())
-    }
-
-    setOpen(false)
-    router.push(params.size > 0 ? `/library/new?${params.toString()}` : '/library/new')
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="lg" variant="destructive">
-          <Plus className="size-4" />
-          Add New Set
-        </Button>
-      </DialogTrigger>
-
-      <DialogContent className="max-w-xl p-0">
-        <DialogHeader>
-          <DialogTitle>Upload New Set</DialogTitle>
-        </DialogHeader>
-
-        <div className="grid gap-4 p-4">
-          <label className="grid gap-2">
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#1a1a1a]">
-              Set Title
-            </span>
-            <Input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Late Show Crowd Work"
-            />
-          </label>
-
-          <div className="border-2 border-dashed border-[#1a1a1a] bg-white p-4">
-            <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#6d675f]">
-              Next step
-            </p>
-            <p className="mt-2 text-sm leading-6 text-[#4f4a43]">
-              TEMP This library entry point now acts like the prototype&apos;s upload modal, but it
-              keeps the domain contract clean: the next screen is where Trim Range confirmation
-              creates the real Set and its locked current Breakdown.
-            </p>
-          </div>
-
-          <DialogFooter className="border-t-2 border-[#1a1a1a] pt-4">
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={continueToTrimRange}>
-              Continue
-            </Button>
-          </DialogFooter>
-        </div>
-      </DialogContent>
-    </Dialog>
   )
 }
 
@@ -201,22 +132,6 @@ function LibrarySetCard({
   set: NonNullable<ReturnType<typeof useQuery<typeof api.sets.listForViewer>>>[number]
   onManage: () => void
 }) {
-  const breakdown = set.breakdown
-  const setStatusLabel = getSetStatusLabel(set.setStatus)
-  const breakdownBadge = breakdown
-    ? getBreakdownBadgeLabel(
-      breakdown.editability,
-      breakdown.lineSeedingState,
-      breakdown.laughSeedingState,
-    )
-    : 'No Breakdown'
-  const breakdownSummary = breakdown
-    ? getBreakdownSummary(
-      breakdown.editability,
-      breakdown.lineSeedingState,
-      breakdown.laughSeedingState,
-    )
-    : 'No current Breakdown has been linked yet.'
   const retainedDuration = Math.max(
     0,
     set.trimRangeEndSeconds - set.trimRangeStartSeconds,
@@ -236,38 +151,17 @@ function LibrarySetCard({
 
       <Link href={`/sets/${set._id}`} className="block">
         <div className="border-2 border-[#1a1a1a] bg-white shadow-[4px_4px_0px_0px_#1a1a1a] transition-transform duration-150 group-hover:-translate-y-1">
-          <SetPoster
-            setStatusLabel={setStatusLabel}
-            breakdownBadge={breakdownBadge}
-            isLocked={breakdown?.editability !== 'editable'}
-          />
+          <SetPoster />
 
-          <div className="grid gap-3 p-3">
-            <div className="space-y-1">
-              <h2 className="line-clamp-2 pr-11 text-lg font-black uppercase tracking-tight text-[#1a1a1a]">
+          <div className="grid min-w-0 gap-3 p-3">
+            <div className="min-w-0 space-y-1">
+              <h2 className="overflow-hidden text-ellipsis whitespace-nowrap pr-11 text-lg font-black uppercase tracking-tight text-[#1a1a1a]">
                 {set.title}
               </h2>
               <p className="text-[11px] font-medium text-[#6d675f]">
                 {formatCreationDate(set._creationTime)} / {formatDuration(retainedDuration)}
               </p>
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              <StatusPill tone="set">{setStatusLabel}</StatusPill>
-              <StatusPill
-                tone={
-                  breakdown?.lineSeedingState === 'failed' || breakdown?.laughSeedingState === 'failed'
-                    ? 'error'
-                    : breakdown?.editability === 'editable'
-                      ? 'success'
-                      : 'breakdown'
-                }
-              >
-                {breakdownBadge}
-              </StatusPill>
-            </div>
-
-            <p className="text-sm leading-6 text-[#4f4a43]">{breakdownSummary}</p>
           </div>
         </div>
       </Link>
@@ -275,52 +169,12 @@ function LibrarySetCard({
   )
 }
 
-function SetPoster({
-  setStatusLabel,
-  breakdownBadge,
-  isLocked,
-}: {
-  setStatusLabel: string
-  breakdownBadge: string
-  isLocked: boolean
-}) {
+function SetPoster() {
   return (
     <div className="relative aspect-video overflow-hidden bg-[#f0ede8]">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,#ffffff_0%,#f0ede8_50%,#e3ddd6_100%)]" />
       <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,transparent_47%,rgba(26,26,26,0.08)_47%,rgba(26,26,26,0.08)_53%,transparent_53%,transparent_100%)]" />
-      <div className="absolute inset-0 flex flex-col justify-between p-3">
-        <div className="flex items-start justify-between gap-2">
-          <StatusPill tone="poster">{setStatusLabel}</StatusPill>
-        </div>
-      </div>
     </div>
-  )
-}
-
-function StatusPill({
-  children,
-  tone,
-}: {
-  children: React.ReactNode
-  tone: 'set' | 'breakdown' | 'success' | 'error' | 'poster'
-}) {
-  const className =
-    tone === 'success'
-      ? 'bg-[#e7f7ee] text-[#0f5132]'
-      : tone === 'error'
-        ? 'bg-[#fff0f0] text-[#a61b32]'
-        : tone === 'poster'
-          ? 'bg-[#1a1a1a] text-[#faf8f5]'
-          : tone === 'set'
-            ? 'bg-[#1a3a52] text-[#faf8f5]'
-            : 'bg-white text-[#1a1a1a]'
-
-  return (
-    <span
-      className={`inline-flex items-center border-2 border-[#1a1a1a] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${className}`}
-    >
-      {children}
-    </span>
   )
 }
 
@@ -353,7 +207,10 @@ function ManageSetDialog({
       })
       onOpenChange(false)
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Rename failed.')
+      const errorCode = getAppErrorCodeFromConvexError(error)
+      setErrorMessage(
+        errorCode ? getErrorMessageForCode(errorCode) : 'Something went wrong on our side. Try again.',
+      )
       setIsSaving(false)
     }
   }
