@@ -265,6 +265,41 @@ Example panel:
 - don't mix too many accent colors into one screen
 - share implementation details that relate more to developer flows and processes than comedian goals
 
+## Error Handling
+
+User-facing errors must stay in product language and must not expose provider details, raw backend failures, environment issues, or third-party response bodies.
+
+### Core Rules
+
+- Keep raw infrastructure and provider errors on the server side.
+- Return stable machine-readable error codes across API routes, Convex-backed flows, and other server boundaries.
+- Map error codes to user-facing copy in the UI instead of persisting or returning display prose from the backend.
+- Log full developer diagnostics on the server with enough context to debug the failure.
+
+### Error Categories
+
+Start with this small shared taxonomy:
+
+- `validation`
+- `auth`
+- `not_found`
+- `processing_unavailable`
+- `internal`
+
+Only `validation` messages should tell the comedian exactly what to correct. Infrastructure and provider failures should collapse into `processing_unavailable` or `internal`.
+
+### Product Language
+
+- Speak about the user's **Set**, **Playback Source**, or sign-in state.
+- Do not surface vendor names, webhook terminology, HTTP status details, secret/configuration issues, or stack-like text to the user.
+- When playback preparation fails after valid input, treat that upload attempt as failed and tell the user what to do next in product terms.
+
+### Persistence
+
+- Persist stable failure codes in product state.
+- Do not persist raw third-party error text as user-facing state.
+- Derive display text at read/render time from the shared code-to-message mapping.
+
 ## Implementation Notes
 
 When building new screens, start from these defaults:
