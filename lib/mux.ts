@@ -88,7 +88,6 @@ async function muxRequest<TResponse>(
 
 export async function createMuxDirectUpload(args: {
   corsOrigin: string;
-  mediaKind: "audio" | "video";
 }) {
   return muxRequest<MuxUpload>("/uploads", {
     method: "POST",
@@ -96,9 +95,6 @@ export async function createMuxDirectUpload(args: {
       cors_origin: args.corsOrigin,
       new_asset_settings: {
         playback_policy: ["public"],
-        passthrough: JSON.stringify({
-          mediaKind: args.mediaKind,
-        }),
       },
     }),
   });
@@ -133,9 +129,4 @@ export function getMuxPlaybackId(asset: MuxAsset) {
     asset.playback_ids?.find((playbackId) => playbackId.policy === "public")?.id ??
     null
   );
-}
-
-export function getMuxMediaKind(asset: MuxAsset): "audio" | "video" {
-  const hasVideoTrack = asset.tracks?.some((track) => track.type === "video");
-  return hasVideoTrack ? "video" : "audio";
 }

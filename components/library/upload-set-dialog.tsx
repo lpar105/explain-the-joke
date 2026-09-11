@@ -10,11 +10,10 @@ import {
   useState,
 } from "react";
 import Hls from "hls.js";
+import { useRouter } from "next/navigation";
 import {
-  AudioLines,
   Check,
   LoaderCircle,
-  Scissors,
   Upload,
 } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
@@ -34,6 +33,7 @@ import { Button } from "../ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -42,10 +42,8 @@ import {
 import { Input } from "../ui/input";
 
 type UploadStep = "details" | "uploading" | "processing" | "trimming";
-type MediaKind = "audio" | "video";
 
 type DirectUploadResponse = {
-  mediaKind: MediaKind;
   uploadId: string;
   uploadUrl: string | null;
 };
@@ -54,22 +52,13 @@ function isDirectUploadResponse(payload: unknown): payload is DirectUploadRespon
   return (
     typeof payload === "object" &&
     payload !== null &&
-    "mediaKind" in payload &&
     "uploadId" in payload &&
     "uploadUrl" in payload
   );
 }
 
-function inferMediaKind(file: File): MediaKind | null {
-  if (file.type.startsWith("audio/")) {
-    return "audio";
-  }
-
-  if (file.type.startsWith("video/")) {
-    return "video";
-  }
-
-  return null;
+function isVideoFile(file: File) {
+  return file.type.startsWith("video/");
 }
 
 function getDefaultSetTitleFromFileName(fileName: string) {
@@ -83,15 +72,14 @@ function getDefaultSetTitleFromFileName(fileName: string) {
 }
 
 export default function UploadSetDialog() {
+  const router = useRouter();
   const startUploadSession = useMutation(api.sets.startUploadSession);
   const confirmUploadSession = useMutation(api.sets.confirmUploadSession);
-  const discardUploadSession = useMutation(api.sets.discardUploadSession);
 
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState<UploadStep>("details");
   const [title, setTitle] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [mediaKind, setMediaKind] = useState<MediaKind | null>(null);
   const [uploadSessionId, setUploadSessionId] =
     useState<Id<"uploadSessions"> | null>(null);
   const [uploadId, setUploadId] = useState<string | null>(null);
@@ -163,7 +151,6 @@ export default function UploadSetDialog() {
       setTrimRangeEndSeconds((currentEndSeconds) =>
         currentEndSeconds === 0 ? uploadSession.durationSeconds! : currentEndSeconds,
       );
-      setMediaKind(uploadSession.mediaKind);
       setStep("trimming");
       return;
     }
@@ -184,7 +171,6 @@ export default function UploadSetDialog() {
     setStep("details");
     setTitle("");
     setSelectedFile(null);
-    setMediaKind(null);
     setUploadSessionId(null);
     setUploadId(null);
     setAssetId(null);
@@ -222,12 +208,6 @@ export default function UploadSetDialog() {
         }
       }
 
-      if (uploadSessionId !== null) {
-        await discardUploadSession({
-          uploadSessionId,
-        });
-      }
-
       resetFlow();
       setOpen(false);
     } catch (error) {
@@ -238,7 +218,7 @@ export default function UploadSetDialog() {
 
   async function getDirectUploadEndpoint(file: File) {
     if (!file) {
-      throw new Error("Choose an audio or video file before uploading.");
+      throw new Error("Choose a video file before uploading.");
     }
 
     const nextTitle = title.trim();
@@ -246,19 +226,15 @@ export default function UploadSetDialog() {
       throw new Error("Give the Set a title before uploading.");
     }
 
-    const inferredMediaKind = inferMediaKind(file);
-    if (inferredMediaKind === null) {
-      throw new Error("Only audio and video files can enter the Trim Range flow.");
+    if (!isVideoFile(file)) {
+      throw new Error("Only video files can enter the Trim Range flow.");
     }
 
     setErrorMessage(null);
     setStep("uploading");
-    setMediaKind(inferredMediaKind);
     setSelectedFile(file);
 
     let nextUploadId: string | null = null;
-    let nextUploadSessionId: Id<"uploadSessions"> | null = null;
-
     try {
       const response = await fetch("/api/mux/direct-uploads", {
         method: "POST",
@@ -281,13 +257,11 @@ export default function UploadSetDialog() {
       }
 
       const startedSession = await startUploadSession({
-        mediaKind: payload.mediaKind,
         muxUploadId: payload.uploadId,
         originalFileName: file.name,
       });
 
       nextUploadId = payload.uploadId;
-      nextUploadSessionId = startedSession.uploadSessionId;
       setUploadSessionId(startedSession.uploadSessionId);
       setUploadId(payload.uploadId);
       return payload.uploadUrl;
@@ -299,16 +273,6 @@ export default function UploadSetDialog() {
           });
         } catch {
           // Leave cleanup to explicit modal close if the best-effort delete fails.
-        }
-      }
-
-      if (nextUploadSessionId !== null) {
-        try {
-          await discardUploadSession({
-            uploadSessionId: nextUploadSessionId,
-          });
-        } catch {
-          // Leave cleanup to explicit modal close if the best-effort discard fails.
         }
       }
 
@@ -339,7 +303,7 @@ export default function UploadSetDialog() {
     setErrorMessage(null);
 
     try {
-      await confirmUploadSession({
+      const created = await confirmUploadSession({
         uploadSessionId,
         title,
         trimRangeEndSeconds,
@@ -351,6 +315,7 @@ export default function UploadSetDialog() {
 
       resetFlow();
       setOpen(false);
+      router.push(`/sets/${created.setId}`);
     } catch (error) {
       setErrorMessage(getMessageFromConvexError(error));
       setIsConfirming(false);
@@ -359,7 +324,7 @@ export default function UploadSetDialog() {
 
   function handleSubmitUpload() {
     if (selectedFile === null) {
-      setErrorMessage("Choose an audio or video file before submitting.");
+      setErrorMessage("Choose a video file before submitting.");
       return;
     }
 
@@ -368,8 +333,8 @@ export default function UploadSetDialog() {
       return;
     }
 
-    if (inferMediaKind(selectedFile) === null) {
-      setErrorMessage("Only audio and video files can enter the Trim Range flow.");
+    if (!isVideoFile(selectedFile)) {
+      setErrorMessage("Only video files can enter the Trim Range flow.");
       return;
     }
 
@@ -399,30 +364,35 @@ export default function UploadSetDialog() {
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="flex max-h-[calc(100dvh-2rem)] max-w-5xl flex-col overflow-hidden p-0">
+      <DialogContent className="flex h-[calc(100dvh-1rem)] max-h-[60rem] max-w-6xl flex-col overflow-hidden p-0 sm:h-auto sm:max-h-[calc(100dvh-2rem)]">
         <DialogHeader>
           <DialogTitle>
             {step === "trimming" ? "Confirm Trim Range" : "Upload New Set"}
           </DialogTitle>
+          <DialogDescription className="sr-only">
+            Upload one video Set, then choose the Trim Range to keep.
+          </DialogDescription>
         </DialogHeader>
 
-        <div className="grid min-h-0 gap-4 overflow-y-auto p-4">
-          <label className="grid gap-2">
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#1a1a1a]">
-              Set Title
-            </span>
-            <Input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Late Show Crowd Work"
-              disabled={step !== "details"}
-            />
-          </label>
+        <div className="grid min-h-0 flex-1 gap-3 overflow-y-auto p-3 sm:p-4">
+          {step !== "trimming" ? (
+            <label className="grid gap-2">
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#1a1a1a]">
+                Set Title
+              </span>
+              <Input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                placeholder="Late Show Crowd Work"
+                disabled={step !== "details"}
+              />
+            </label>
+          ) : null}
 
           {step !== "trimming" ? (
             <div className="grid gap-3">
-              <span className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#6d675f]">
-                Audio or Video Upload
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#1a1a1a]">
+                Video Upload
               </span>
               <DirectUploadField
                 key={uploaderKey}
@@ -430,7 +400,7 @@ export default function UploadSetDialog() {
                 disabled={step !== "details"}
                 getUploadEndpoint={getDirectUploadEndpoint}
                 startUploadNonce={startUploadNonce}
-                onFileSelected={(file, nextMediaKind) => {
+                onFileSelected={(file) => {
                   const nextDefaultTitle = getDefaultSetTitleFromFileName(file.name);
                   const previousDefaultTitle = selectedFile
                     ? getDefaultSetTitleFromFileName(selectedFile.name)
@@ -438,7 +408,6 @@ export default function UploadSetDialog() {
                   const trimmedTitle = title.trim();
 
                   setSelectedFile(file);
-                  setMediaKind(nextMediaKind);
                   setErrorMessage(null);
 
                   if (
@@ -466,11 +435,10 @@ export default function UploadSetDialog() {
             </div>
           ) : null}
 
-          {step === "trimming" && hlsUrl && durationSeconds !== null && mediaKind ? (
+          {step === "trimming" && hlsUrl && durationSeconds !== null ? (
             <TrimRangeEditor
               durationSeconds={durationSeconds}
               hlsUrl={hlsUrl}
-              mediaKind={mediaKind}
               playbackId={playbackId}
               trimRangeEndSeconds={trimRangeEndSeconds}
               trimRangeStartSeconds={trimRangeStartSeconds}
@@ -485,42 +453,43 @@ export default function UploadSetDialog() {
             </p>
           ) : null}
 
-          <DialogFooter className="border-t-2 border-[#1a1a1a] pt-4">
+        </div>
+
+        <DialogFooter className="shrink-0 border-t-2 border-[#1a1a1a] bg-[#faf8f5] p-3 sm:p-4">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void cleanupTemporaryUploadAndClose()}
+            disabled={isCleaningUp || isConfirming}
+          >
+            {isCleaningUp ? <LoaderCircle className="size-4 animate-spin" /> : null}
+            Cancel
+          </Button>
+
+          {step === "trimming" ? (
             <Button
               type="button"
-              variant="outline"
-              onClick={() => void cleanupTemporaryUploadAndClose()}
-              disabled={isCleaningUp || isConfirming}
+              onClick={() => void handleConfirmTrimRange()}
+              disabled={isConfirming || clipDurationSeconds <= 0 || title.trim().length === 0}
             >
-              {isCleaningUp ? <LoaderCircle className="size-4 animate-spin" /> : null}
-              Cancel
+              {isConfirming ? (
+                <LoaderCircle className="size-4 animate-spin" />
+              ) : (
+                <Check className="size-4" />
+              )}
+              Confirm Trim Range
             </Button>
-
-            {step === "trimming" ? (
-              <Button
-                type="button"
-                onClick={() => void handleConfirmTrimRange()}
-                disabled={isConfirming || clipDurationSeconds <= 0 || title.trim().length === 0}
-              >
-                {isConfirming ? (
-                  <LoaderCircle className="size-4 animate-spin" />
-                ) : (
-                  <Check className="size-4" />
-                )}
-                Confirm Trim Range
-              </Button>
-            ) : step === "details" ? (
-              <Button
-                type="button"
-                onClick={handleSubmitUpload}
-                disabled={selectedFile === null || title.trim().length === 0}
-              >
-                <Upload className="size-4" />
-                Submit
-              </Button>
-            ) : null}
-          </DialogFooter>
-        </div>
+          ) : step === "details" ? (
+            <Button
+              type="button"
+              onClick={handleSubmitUpload}
+              disabled={selectedFile === null || title.trim().length === 0}
+            >
+              <Upload className="size-4" />
+              Submit
+            </Button>
+          ) : null}
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -529,7 +498,6 @@ export default function UploadSetDialog() {
 function TrimRangeEditor(props: {
   durationSeconds: number;
   hlsUrl: string;
-  mediaKind: MediaKind;
   playbackId: string | null;
   trimRangeEndSeconds: number;
   trimRangeStartSeconds: number;
@@ -568,7 +536,7 @@ function TrimRangeEditor(props: {
   );
 
   const thumbnailTimes = useMemo(() => {
-    if (props.mediaKind !== "video" || !props.playbackId) {
+    if (!props.playbackId) {
       return [];
     }
 
@@ -583,7 +551,7 @@ function TrimRangeEditor(props: {
         timeSeconds,
       };
     });
-  }, [props.durationSeconds, props.mediaKind, props.playbackId]);
+  }, [props.durationSeconds, props.playbackId]);
 
   function updateTrimStart(nextValue: number, seekToTimeSeconds: (nextSeconds: number) => void) {
     const nextStart = Math.max(
@@ -649,104 +617,109 @@ function TrimRangeEditor(props: {
     window.addEventListener("pointerup", handlePointerUp);
   }
 
+  function seekFromTimeline(
+    event: React.PointerEvent<HTMLDivElement>,
+    seekToTimeSeconds: (nextSeconds: number) => void,
+  ) {
+    if (
+      event.button !== 0 ||
+      (event.target instanceof Element && event.target.closest("button"))
+    ) {
+      return;
+    }
+
+    const nextSeconds = getSecondsFromPointer(event.clientX);
+    seekToTimeSeconds(nextSeconds);
+    setCurrentTimeSeconds(nextSeconds);
+  }
+
   return (
     <HlsTrimPreview
       currentTimeSeconds={currentTimeSeconds}
       durationSeconds={props.durationSeconds}
       hlsUrl={props.hlsUrl}
-      mediaKind={props.mediaKind}
       trimRangeEndSeconds={props.trimRangeEndSeconds}
       trimRangeStartSeconds={props.trimRangeStartSeconds}
       onCurrentTimeSecondsChange={setCurrentTimeSeconds}
     >
       {({ seekToTimeSeconds }) => (
-        <>
-          <div className="grid gap-4 border-2 border-[#1a1a1a] bg-white p-4">
-            <div className="grid gap-3">
-              <div
-                ref={timelineRef}
-                className="relative overflow-hidden border-2 border-[#1a1a1a] bg-[#f0ede8]"
-              >
-                {thumbnailTimes.length > 0 ? (
-                  <div className="grid h-full grid-cols-8">
-                    {thumbnailTimes.map((thumbnail) => (
-                      <img
-                        key={thumbnail.src}
-                        src={thumbnail.src}
-                        alt={`Frame preview at ${formatTimestamp(
-                          thumbnail.timeSeconds,
-                        )}`}
-                        className="h-full w-full object-cover"
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <div className="grid h-full grid-cols-12 gap-1 p-2">
-                    {Array.from({ length: 12 }).map((_, index) => (
-                      <div
-                        key={index}
-                        className="rounded-sm bg-[linear-gradient(180deg,#e3ddd6_0%,#f7f3ee_100%)]"
-                      />
-                    ))}
-                  </div>
-                )}
-
-                <div
-                  className="absolute inset-y-0 left-0 bg-[#1a1a1a]/45"
-                  style={{ width: `${startPercent}%` }}
+        <div
+          ref={timelineRef}
+          onPointerDown={(event) => seekFromTimeline(event, seekToTimeSeconds)}
+          className="relative h-8 cursor-pointer overflow-hidden border-2 border-[#1a1a1a] bg-[#f0ede8] sm:h-10"
+        >
+          {thumbnailTimes.length > 0 ? (
+            <div className="grid h-full grid-cols-8">
+              {thumbnailTimes.map((thumbnail) => (
+                <img
+                  key={thumbnail.src}
+                  src={thumbnail.src}
+                  alt={`Frame preview at ${formatTimestamp(
+                    thumbnail.timeSeconds,
+                  )}`}
+                  className="h-full w-full object-cover"
                 />
-                <div
-                  className="absolute inset-y-0 border-y-2 border-[#1a1a1a] bg-[#ffd966]/25"
-                  style={{
-                    left: `${startPercent}%`,
-                    width: `${Math.max(0, endPercent - startPercent)}%`,
-                  }}
-                />
-                <div
-                  className="absolute inset-y-0 right-0 bg-[#1a1a1a]/45"
-                  style={{ width: `${Math.max(0, 100 - endPercent)}%` }}
-                />
-                <div
-                  className="absolute inset-y-0 w-[3px] bg-[#c41e3a]"
-                  style={{ left: `calc(${playheadPercent}% - 1px)` }}
-                />
-                <div
-                  className="absolute inset-y-0 border-x-2 border-[#1a1a1a] bg-transparent"
-                  style={{
-                    left: `${startPercent}%`,
-                    width: `${Math.max(0, endPercent - startPercent)}%`,
-                  }}
-                >
-                  <button
-                    type="button"
-                    aria-label="Trim start"
-                    onPointerDown={(event) => beginHandleDrag("start", event, seekToTimeSeconds)}
-                    className="absolute left-0 top-1/2 z-10 flex h-10 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-[#1a1a1a] bg-[#c41e3a] shadow-[2px_2px_0px_0px_#1a1a1a]"
-                  >
-                    <span className="sr-only">Trim start</span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="Trim end"
-                    onPointerDown={(event) => beginHandleDrag("end", event, seekToTimeSeconds)}
-                    className="absolute left-full top-1/2 z-10 flex h-10 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-[#1a1a1a] bg-[#c41e3a] shadow-[2px_2px_0px_0px_#1a1a1a]"
-                  >
-                    <span className="sr-only">Trim end</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between gap-3 text-[10px] font-mono uppercase tracking-[0.18em] text-[#6d675f]">
-                <span>{formatTimestamp(props.trimRangeStartSeconds)}</span>
-                <div className="flex items-center gap-2">
-                  <Scissors className="size-4" />
-                  <span>Drag the handles</span>
-                </div>
-                <span>{formatTimestamp(props.trimRangeEndSeconds)}</span>
-              </div>
+              ))}
             </div>
+          ) : (
+            <div className="grid h-full grid-cols-12 gap-1 p-2">
+              {Array.from({ length: 12 }).map((_, index) => (
+                <div
+                  key={index}
+                  className="rounded-sm bg-[linear-gradient(180deg,#e3ddd6_0%,#f7f3ee_100%)]"
+                />
+              ))}
+            </div>
+          )}
+
+          <div
+            className="absolute inset-y-0 left-0 bg-[#1a1a1a]/45"
+            style={{ width: `${startPercent}%` }}
+          />
+          <div
+            className="absolute inset-y-0 border-y-2 border-[#1a1a1a] bg-[#ffd966]/25"
+            style={{
+              left: `${startPercent}%`,
+              width: `${Math.max(0, endPercent - startPercent)}%`,
+            }}
+          />
+          <div
+            className="absolute inset-y-0 right-0 bg-[#1a1a1a]/45"
+            style={{ width: `${Math.max(0, 100 - endPercent)}%` }}
+          />
+          <div
+            className="absolute inset-y-0 w-[3px] bg-[#c41e3a]"
+            style={{ left: `calc(${playheadPercent}% - 1px)` }}
+          />
+          <div
+            className="absolute inset-y-0 border-x-2 border-[#1a1a1a] bg-transparent"
+            style={{
+              left: `${startPercent}%`,
+              width: `${Math.max(0, endPercent - startPercent)}%`,
+            }}
+          >
+            <button
+              type="button"
+              aria-label="Trim start"
+              onPointerDown={(event) =>
+                beginHandleDrag("start", event, seekToTimeSeconds)
+              }
+              className="absolute left-0 top-1/2 z-10 flex h-4 w-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-[#1a1a1a] bg-[#c41e3a] shadow-[2px_2px_0px_0px_#1a1a1a]"
+            >
+              <span className="sr-only">Trim start</span>
+            </button>
+            <button
+              type="button"
+              aria-label="Trim end"
+              onPointerDown={(event) =>
+                beginHandleDrag("end", event, seekToTimeSeconds)
+              }
+              className="absolute left-full top-1/2 z-10 flex h-4 w-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center border-2 border-[#1a1a1a] bg-[#c41e3a] shadow-[2px_2px_0px_0px_#1a1a1a]"
+            >
+              <span className="sr-only">Trim end</span>
+            </button>
           </div>
-        </>
+        </div>
       )}
     </HlsTrimPreview>
   );
@@ -759,12 +732,11 @@ function HlsTrimPreview(props: {
   currentTimeSeconds: number;
   durationSeconds: number;
   hlsUrl: string;
-  mediaKind: MediaKind;
   trimRangeEndSeconds: number;
   trimRangeStartSeconds: number;
   onCurrentTimeSecondsChange: (seconds: number) => void;
 }) {
-  const mediaRef = useRef<HTMLVideoElement | HTMLAudioElement | null>(null);
+  const mediaRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     const media = mediaRef.current;
@@ -800,11 +772,11 @@ function HlsTrimPreview(props: {
     }
 
     const syncIntoTrimWindow = () => {
-      if (media.currentTime < props.trimRangeStartSeconds) {
+      if (!media.paused && media.currentTime < props.trimRangeStartSeconds) {
         media.currentTime = props.trimRangeStartSeconds;
       }
 
-      if (media.currentTime > props.trimRangeEndSeconds) {
+      if (!media.paused && media.currentTime > props.trimRangeEndSeconds) {
         media.currentTime = props.trimRangeStartSeconds;
       }
 
@@ -817,7 +789,7 @@ function HlsTrimPreview(props: {
     };
 
     const handleTimeUpdate = () => {
-      if (media.currentTime >= props.trimRangeEndSeconds) {
+      if (!media.paused && media.currentTime >= props.trimRangeEndSeconds) {
         media.currentTime = props.trimRangeStartSeconds;
         void media.play().catch(() => {
           media.pause();
@@ -845,8 +817,8 @@ function HlsTrimPreview(props: {
   function seekToTimeSeconds(nextSeconds: number) {
     const media = mediaRef.current;
     const clampedTimeSeconds = Math.min(
-      props.trimRangeEndSeconds,
-      Math.max(props.trimRangeStartSeconds, nextSeconds),
+      props.durationSeconds,
+      Math.max(0, nextSeconds),
     );
 
     props.onCurrentTimeSecondsChange(clampedTimeSeconds);
@@ -859,37 +831,14 @@ function HlsTrimPreview(props: {
   }
 
   return (
-    <div className="grid min-h-0 gap-4">
-      <div className="overflow-hidden border-2 border-[#1a1a1a] bg-[#f0ede8]">
-        {props.mediaKind === "video" ? (
-          <video
-            ref={mediaRef as RefObject<HTMLVideoElement>}
-            controls
-            playsInline
-            className="aspect-video max-h-[min(36dvh,24rem)] w-full bg-black object-contain sm:max-h-[min(42dvh,28rem)]"
-          />
-        ) : (
-          <div className="grid gap-4 p-6">
-            <div className="flex items-center gap-3">
-              <div className="flex size-12 items-center justify-center border-2 border-[#1a1a1a] bg-white">
-                <AudioLines className="size-5" />
-              </div>
-              <div>
-                <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#6d675f]">
-                  Audio Preview
-                </p>
-                <p className="mt-1 text-sm leading-6 text-[#4f4a43]">
-                  The same Trim Range confirmation flow applies to audio-only Sets.
-                </p>
-              </div>
-            </div>
-            <audio
-              ref={mediaRef as RefObject<HTMLAudioElement>}
-              controls
-              className="w-full"
-            />
-          </div>
-        )}
+    <div className="grid min-h-0 gap-3">
+      <div className="flex h-[min(50dvh,34rem)] min-h-48 items-center justify-center overflow-hidden border-2 border-[#1a1a1a] bg-black sm:min-h-56">
+        <video
+          ref={mediaRef as RefObject<HTMLVideoElement>}
+          controls
+          playsInline
+          className="block h-full w-full bg-black object-contain"
+        />
       </div>
 
       {props.children({ seekToTimeSeconds })}

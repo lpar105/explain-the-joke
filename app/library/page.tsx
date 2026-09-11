@@ -2,17 +2,19 @@
 
 import { SignInButton, SignUpButton } from '@clerk/nextjs'
 import { Authenticated, AuthLoading, Unauthenticated, useMutation, useQuery } from 'convex/react'
-import { LoaderCircle, PencilLine, Plus } from 'lucide-react'
+import { LoaderCircle, PencilLine } from 'lucide-react'
 import Link from 'next/link'
 import { useMemo, useState } from 'react'
 
 import { api } from '../../convex/_generated/api'
+import type { Id } from '../../convex/_generated/dataModel'
 import { getAppErrorCodeFromConvexError, getErrorMessageForCode } from '../../lib/errors'
 import UploadSetDialog from '../../components/library/upload-set-dialog'
 import { Button } from '../../components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -23,6 +25,28 @@ import {
   formatDuration,
 } from '../../lib/set-status'
 
+type LibrarySet = {
+  _id: Id<'sets'>
+  _creationTime: number
+  currentBreakdownId: Id<'breakdowns'> | null
+  setStatus: 'playbackPending' | 'playable' | 'unavailable'
+  title: string
+  trimRangeEndSeconds: number
+  trimRangeStartSeconds: number
+  activePlaybackSource: {
+    _id: Id<'playbackSources'>
+    kind: 'temporary' | 'persistent'
+    playbackId: string
+    provider: 'mux' | 'bunny'
+  } | null
+  breakdown: {
+    _id: Id<'breakdowns'>
+    editability: 'locked' | 'editable'
+    laughSeedingState: 'pending' | 'running' | 'retrying' | 'ready' | 'failed'
+    lineSeedingState: 'pending' | 'running' | 'retrying' | 'ready' | 'failed'
+  } | null
+}
+
 export default function LibraryPage() {
   return (
     <main className="min-h-[calc(100vh-4.5rem)] bg-[#faf8f5] px-4 py-5 text-[#1a1a1a] md:px-6">
@@ -30,9 +54,6 @@ export default function LibraryPage() {
         <section className="border-2 border-[#1a1a1a] bg-white shadow-[6px_6px_0px_0px_#1a1a1a]">
           <div className="grid gap-4 border-b-2 border-[#1a1a1a] bg-[#f0ede8] p-4 md:grid-cols-[1fr_auto] md:items-end">
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[#6d675f]">
-                View and Add Sets
-              </p>
               <h1 className="mt-2 text-3xl font-black uppercase tracking-tight md:text-5xl">
                 My Library
               </h1>
@@ -78,7 +99,7 @@ export default function LibraryPage() {
 }
 
 function LibraryGrid() {
-  const sets = useQuery(api.sets.listForViewer, {})
+  const sets = useQuery(api.sets.listForViewer, {}) as LibrarySet[] | undefined
   const [editingSetId, setEditingSetId] = useState<string | null>(null)
 
   const activeSet = useMemo(
@@ -93,13 +114,9 @@ function LibraryGrid() {
   if (sets.length === 0) {
     return (
       <div className="flex min-h-[360px] flex-col items-center justify-center border-2 border-dashed border-[#1a1a1a] bg-[#f7f3ee] px-6 text-center">
-        <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-[#6d675f]">Empty Rack</p>
         <h2 className="mt-3 text-2xl font-black uppercase tracking-tight">
           No Sets Uploaded Yet
         </h2>
-        <p className="mt-2 max-w-xl text-sm font-medium text-[#5a554f]">
-          Upload a set to get started!
-        </p>
       </div>
     )
   }
@@ -129,7 +146,7 @@ function LibrarySetCard({
   set,
   onManage,
 }: {
-  set: NonNullable<ReturnType<typeof useQuery<typeof api.sets.listForViewer>>>[number]
+  set: LibrarySet
   onManage: () => void
 }) {
   const retainedDuration = Math.max(
@@ -220,6 +237,9 @@ function ManageSetDialog({
       <DialogContent className="max-w-lg p-0">
         <DialogHeader>
           <DialogTitle>Manage Set</DialogTitle>
+          <DialogDescription className="sr-only">
+            Rename this Set or review the available management actions.
+          </DialogDescription>
         </DialogHeader>
 
         {set ? (
@@ -234,16 +254,6 @@ function ManageSetDialog({
                 placeholder="Untitled Set"
               />
             </label>
-
-            <div className="border-2 border-[#1a1a1a] bg-white p-3">
-              <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#6d675f]">
-                Not here yet
-              </p>
-              <p className="mt-2 text-sm leading-6 text-[#4f4a43]">
-                Deletion is intentionally not wired into this modal yet because the product model
-                routes Set removal through a Trash Window rather than a permanent library delete.
-              </p>
-            </div>
 
             {errorMessage ? (
               <p className="border-2 border-[#1a1a1a] bg-[#fff0f0] px-3 py-3 text-sm text-[#a61b32]">

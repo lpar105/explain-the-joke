@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   clampTime,
   getClipDurationSeconds,
+  getClipTimeFromSourceTime,
   getClipRelativeTime,
+  getPlaybackWindowForSource,
+  getSourceTimeFromClipTime,
 } from "../../lib/trim-range";
 
 describe("trim range helpers", () => {
@@ -21,5 +24,26 @@ describe("trim range helpers", () => {
     expect(getClipRelativeTime(42, 30, 90)).toBe(12);
     expect(getClipRelativeTime(18, 30, 90)).toBe(0);
     expect(getClipRelativeTime(140, 30, 90)).toBe(60);
+  });
+
+  it("uses the upload timeline for temporary mux playback and clip-relative time for bunny playback", () => {
+    expect(getPlaybackWindowForSource("mux", 30, 90)).toEqual({
+      startSeconds: 30,
+      endSeconds: 90,
+    });
+    expect(getPlaybackWindowForSource("bunny", 30, 90)).toEqual({
+      startSeconds: 0,
+      endSeconds: 60,
+    });
+  });
+
+  it("converts between clip-relative and source-relative playback time", () => {
+    expect(getSourceTimeFromClipTime(12, "mux", 30, 90)).toBe(42);
+    expect(getSourceTimeFromClipTime(12, "bunny", 30, 90)).toBe(12);
+    expect(getSourceTimeFromClipTime(80, "mux", 30, 90)).toBe(90);
+
+    expect(getClipTimeFromSourceTime(42, "mux", 30, 90)).toBe(12);
+    expect(getClipTimeFromSourceTime(12, "bunny", 30, 90)).toBe(12);
+    expect(getClipTimeFromSourceTime(12, "mux", 30, 90)).toBe(0);
   });
 });

@@ -1,5 +1,5 @@
 import { auth } from "@clerk/nextjs/server";
-import { fetchQuery } from "convex/nextjs";
+import { fetchMutation, fetchQuery } from "convex/nextjs";
 
 import { api } from "../../../../../convex/_generated/api";
 import {
@@ -11,7 +11,6 @@ import {
   deleteMuxAsset,
   getMuxAsset,
   getMuxDirectUpload,
-  getMuxMediaKind,
   getMuxPlaybackId,
 } from "../../../../../lib/mux";
 
@@ -25,7 +24,7 @@ async function requireOwnedUploadSession(uploadId: string) {
     };
   }
 
-  const token = await getToken({ template: "convex" });
+  const token = await getToken();
   if (!token) {
     return {
       errorResponse: Response.json({ code: "auth" }, { status: 401 }),
@@ -48,6 +47,8 @@ async function requireOwnedUploadSession(uploadId: string) {
 
   return {
     errorResponse: null,
+    token,
+    uploadSessionId: uploadSession._id,
     userId,
   };
 }
@@ -57,13 +58,16 @@ export async function GET(
   context: { params: Promise<{ uploadId: string }> },
 ) {
   const { uploadId } = await context.params;
-  const access = await requireOwnedUploadSession(uploadId);
-
-  if (access.errorResponse) {
-    return access.errorResponse;
-  }
+  let userId: string | null = null;
 
   try {
+    const access = await requireOwnedUploadSession(uploadId);
+    userId = access.userId;
+
+    if (access.errorResponse) {
+      return access.errorResponse;
+    }
+
     const upload = await getMuxDirectUpload(uploadId);
     const assetId = upload.asset_id ?? null;
 
@@ -73,7 +77,6 @@ export async function GET(
         assetStatus: null,
         durationSeconds: null,
         hlsUrl: null,
-        mediaKind: null,
         playbackId: null,
         uploadStatus: upload.status,
       });
@@ -81,23 +84,20 @@ export async function GET(
 
     const asset = await getMuxAsset(assetId);
     const playbackId = getMuxPlaybackId(asset);
-    const mediaKind = getMuxMediaKind(asset);
-
     return Response.json({
       assetId,
       assetStatus: asset.status,
       durationSeconds: asset.duration ?? null,
       hlsUrl: playbackId ? `https://stream.mux.com/${playbackId}.m3u8` : null,
-      mediaKind,
       playbackId,
       uploadStatus: upload.status,
     });
   } catch (error) {
     const apiError = toApiErrorResponseBody(error, "internal");
-    logServerError("Could not load direct upload status from Mux.", error, {
+    logServerError("Could not load direct upload status.", error, {
       route: "app/api/mux/direct-uploads/[uploadId]#GET",
       uploadId,
-      userId: access.userId,
+      userId,
     });
     return Response.json(apiError.body, { status: apiError.status });
   }
@@ -108,13 +108,22 @@ export async function DELETE(
   context: { params: Promise<{ uploadId: string }> },
 ) {
   const { uploadId } = await context.params;
-  const access = await requireOwnedUploadSession(uploadId);
-
-  if (access.errorResponse) {
-    return access.errorResponse;
-  }
+  let userId: string | null = null;
 
   try {
+    const access = await requireOwnedUploadSession(uploadId);
+    userId = access.userId;
+
+    if (access.errorResponse) {
+      return access.errorResponse;
+    }
+
+    await fetchMutation(
+      api.sets.discardUploadSession,
+      { uploadSessionId: access.uploadSessionId },
+      { token: access.token },
+    );
+
     const upload = await getMuxDirectUpload(uploadId);
 
     if (upload.asset_id) {
@@ -133,10 +142,10 @@ export async function DELETE(
     return Response.json({ deletedAssetId: null, uploadId });
   } catch (error) {
     const apiError = toApiErrorResponseBody(error, "internal");
-    logServerError("Could not clean up direct upload media from Mux.", error, {
+    logServerError("Could not clean up direct upload.", error, {
       route: "app/api/mux/direct-uploads/[uploadId]#DELETE",
       uploadId,
-      userId: access.userId,
+      userId,
     });
     return Response.json(apiError.body, { status: apiError.status });
   }

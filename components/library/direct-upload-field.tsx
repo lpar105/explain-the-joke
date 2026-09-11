@@ -9,7 +9,6 @@ import {
 } from "react";
 import { createUpload, type UpChunk } from "@mux/upchunk";
 import {
-  AudioLines,
   RefreshCcw,
   Upload,
   Video,
@@ -20,25 +19,16 @@ import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 
 type UploadState = "idle" | "uploading" | "processing" | "error";
-type MediaKind = "audio" | "video";
 
-function inferMediaKind(file: File): MediaKind | null {
-  if (file.type.startsWith("audio/")) {
-    return "audio";
-  }
-
-  if (file.type.startsWith("video/")) {
-    return "video";
-  }
-
-  return null;
+function isVideoFile(file: File) {
+  return file.type.startsWith("video/");
 }
 
 export default function DirectUploadField(props: {
   autoUpload?: boolean;
   disabled?: boolean;
   getUploadEndpoint: (file: File) => Promise<string>;
-  onFileSelected: (file: File, mediaKind: MediaKind) => void;
+  onFileSelected: (file: File) => void;
   onUploadError: (message: string) => void;
   onUploadProgress?: (progressPercent: number) => void;
   onUploadStart: () => void;
@@ -54,14 +44,13 @@ export default function DirectUploadField(props: {
   const previousStartUploadNonceRef = useRef<number | undefined>(props.startUploadNonce);
 
   function beginUpload(file: File) {
-    const mediaKind = inferMediaKind(file);
-    if (mediaKind === null) {
-      props.onUploadError("Only audio and video files can enter the Trim Range flow.");
+    if (!isVideoFile(file)) {
+      props.onUploadError("Only video files can enter the Trim Range flow.");
       setUploadState("error");
       return;
     }
 
-    props.onFileSelected(file, mediaKind);
+    props.onFileSelected(file);
     props.onUploadError("");
     props.onUploadStart();
     setSelectedFile(file);
@@ -102,9 +91,8 @@ export default function DirectUploadField(props: {
       return;
     }
 
-    const mediaKind = inferMediaKind(file);
-    if (mediaKind === null) {
-      props.onUploadError("Only audio and video files can enter the Trim Range flow.");
+    if (!isVideoFile(file)) {
+      props.onUploadError("Only video files can enter the Trim Range flow.");
       setUploadState("error");
       return;
     }
@@ -114,7 +102,7 @@ export default function DirectUploadField(props: {
     setSelectedFile(file);
     setUploadState("idle");
     setProgressPercent(0);
-    props.onFileSelected(file, mediaKind);
+    props.onFileSelected(file);
     props.onUploadError("");
 
     if (props.autoUpload ?? true) {
@@ -153,7 +141,6 @@ export default function DirectUploadField(props: {
     beginUpload(selectedFile);
   }
 
-  const mediaKind = selectedFile ? inferMediaKind(selectedFile) : null;
   const showControls = uploadState === "error";
 
   return (
@@ -161,7 +148,7 @@ export default function DirectUploadField(props: {
       <input
         ref={inputRef}
         type="file"
-        accept="audio/*,video/*"
+        accept="video/*"
         className="hidden"
         onChange={(event) => handleFiles(event.target.files)}
       />
@@ -198,7 +185,7 @@ export default function DirectUploadField(props: {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="grid gap-1">
             <h3 className="text-xl font-black uppercase tracking-tight text-[#1a1a1a] ">
-              Add media
+              Add video
             </h3>
           </div>
 
@@ -214,16 +201,12 @@ export default function DirectUploadField(props: {
 
         {selectedFile ? (
           <div className="flex flex-wrap items-center gap-2 text-[11px] font-medium text-[#4f4a43]">
-            {mediaKind === "audio" ? (
-              <AudioLines className="size-4" />
-            ) : (
-              <Video className="size-4" />
-            )}
+            <Video className="size-4" />
             <span>{selectedFile.name}</span>
           </div>
         ) : (
           <p className="text-sm leading-6 text-[#4f4a43]">
-            Drop a file here or choose one from disk.
+            Drop a video here or choose one from disk.
           </p>
         )}
 

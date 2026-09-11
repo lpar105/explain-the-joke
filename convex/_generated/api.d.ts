@@ -9,8 +9,13 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as bunny from "../bunny.js";
+import type * as bunnyStream from "../bunnyStream.js";
 import type * as http from "../http.js";
+import type * as setIngest from "../setIngest.js";
+import type * as setIngestModal from "../setIngestModal.js";
 import type * as sets from "../sets.js";
+import type * as workflow from "../workflow.js";
 
 import type {
   ApiFromModules,
@@ -20,8 +25,13 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  bunny: typeof bunny;
+  bunnyStream: typeof bunnyStream;
   http: typeof http;
+  setIngest: typeof setIngest;
+  setIngestModal: typeof setIngestModal;
   sets: typeof sets;
+  workflow: typeof workflow;
 }>;
 
 /**
@@ -50,4 +60,7 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  bunny: import("convex-bunny/_generated/component.js").ComponentApi<"bunny">;
+  workflow: import("@convex-dev/workflow/_generated/component.js").ComponentApi<"workflow">;
+};

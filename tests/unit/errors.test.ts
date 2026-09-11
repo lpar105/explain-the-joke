@@ -20,7 +20,6 @@ describe("server error logging", () => {
       });
 
       logServerError("Could not create a Mux direct upload.", error, {
-        mediaKind: "video",
         route: "app/api/mux/direct-uploads#POST",
         userId: "user_123",
       });
@@ -31,7 +30,6 @@ describe("server error logging", () => {
         expect.objectContaining({
           code: "processing_unavailable",
           context: {
-            mediaKind: "video",
             route: "app/api/mux/direct-uploads#POST",
             userId: "user_123",
           },

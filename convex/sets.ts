@@ -1,9 +1,17 @@
 import { v } from "convex/values";
 
+import { isAllowedDevEmail } from "../lib/dev-access";
 import { toConvexError } from "../lib/errors";
+import { composeTranscriptText } from "../lib/setAnalysis";
 import type { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { internalMutation, mutation, query } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
 
 function normalizeTitle(title: string) {
   return title.trim();
@@ -60,6 +68,98 @@ async function getActivePlaybackSource(
     .unique();
 }
 
+export const getActivePlaybackSourceInternal = internalQuery({
+  args: {
+    setId: v.id("sets"),
+  },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("playbackSources")
+      .withIndex("by_setId_and_isActive", (q) =>
+        q.eq("setId", args.setId).eq("isActive", true),
+      )
+      .unique();
+  },
+});
+
+export const getPlaybackSourcesForSetInternal = internalQuery({
+  args: {
+    setId: v.id("sets"),
+  },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("playbackSources")
+      .withIndex("by_setId_and_isActive", (q) => q.eq("setId", args.setId))
+      .take(20);
+  },
+});
+
+export const activateBunnyPlaybackSourceInternal = internalMutation({
+  args: {
+    playbackUrl: v.string(),
+    playbackMode: v.union(v.literal("direct"), v.literal("hls")),
+    providerAssetId: v.string(),
+    providerUploadId: v.optional(v.string()),
+    setId: v.id("sets"),
+  },
+  handler: async (ctx, args) => {
+    const activeSources = await ctx.db
+      .query("playbackSources")
+      .withIndex("by_setId_and_isActive", (q) =>
+        q.eq("setId", args.setId).eq("isActive", true),
+      )
+      .take(10);
+
+    const existingBunnySource = activeSources.find(
+      (source) =>
+        source.provider === "bunny" &&
+        source.playbackId === args.playbackUrl &&
+        source.playbackMode === args.playbackMode &&
+        source.providerAssetId === args.providerAssetId,
+    );
+
+    for (const source of activeSources) {
+      if (source.isActive) {
+        await ctx.db.patch(source._id, { isActive: false });
+      }
+    }
+
+    if (existingBunnySource) {
+      await ctx.db.patch(existingBunnySource._id, { isActive: true });
+      return existingBunnySource._id;
+    }
+
+    return ctx.db.insert("playbackSources", {
+      isActive: true,
+      kind: "persistent",
+      playbackId: args.playbackUrl,
+      playbackMode: args.playbackMode,
+      provider: "bunny",
+      providerAssetId: args.providerAssetId,
+      ...(args.providerUploadId === undefined
+        ? {}
+        : { providerUploadId: args.providerUploadId }),
+      setId: args.setId,
+    });
+  },
+});
+
+export const deletePlaybackSourcesInternal = internalMutation({
+  args: {
+    playbackSourceIds: v.array(v.id("playbackSources")),
+  },
+  handler: async (ctx, args) => {
+    for (const playbackSourceId of args.playbackSourceIds) {
+      const playbackSource = await ctx.db.get(playbackSourceId);
+      if (playbackSource !== null) {
+        await ctx.db.delete(playbackSourceId);
+      }
+    }
+
+    return null;
+  },
+});
+
 export const listForViewer = query({
   args: {},
   handler: async (ctx) => {
@@ -98,7 +198,6 @@ export const listForViewer = query({
             ? {
                 _id: activePlaybackSource._id,
                 kind: activePlaybackSource.kind,
-                mediaKind: activePlaybackSource.mediaKind,
                 playbackId: activePlaybackSource.playbackId,
                 provider: activePlaybackSource.provider,
               }
@@ -152,7 +251,6 @@ export const getForViewer = query({
         ? {
             _id: activePlaybackSource._id,
             kind: activePlaybackSource.kind,
-            mediaKind: activePlaybackSource.mediaKind,
             playbackId: activePlaybackSource.playbackId,
             provider: activePlaybackSource.provider,
           }
@@ -161,9 +259,9 @@ export const getForViewer = query({
         ? {
             _id: currentBreakdown._id,
             editability: currentBreakdown.editability,
-            laughFailureReason: currentBreakdown.laughFailureReason ?? null,
+            laughFailureCode: currentBreakdown.laughFailureCode ?? null,
             laughSeedingState: currentBreakdown.laughSeedingState,
-            lineFailureReason: currentBreakdown.lineFailureReason ?? null,
+            lineFailureCode: currentBreakdown.lineFailureCode ?? null,
             lineSeedingState: currentBreakdown.lineSeedingState,
           }
         : null,
@@ -171,9 +269,377 @@ export const getForViewer = query({
   },
 });
 
+export const getDevPipelineDashboard = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+
+    if (identity === null) {
+      return null;
+    }
+
+    const uploadSessions = await ctx.db
+      .query("uploadSessions")
+      .withIndex("by_ownerTokenIdentifier", (q) =>
+        q.eq("ownerTokenIdentifier", identity.tokenIdentifier),
+      )
+      .order("desc")
+      .take(100);
+    const sets = await ctx.db
+      .query("sets")
+      .withIndex("by_ownerTokenIdentifier", (q) =>
+        q.eq("ownerTokenIdentifier", identity.tokenIdentifier),
+      )
+      .order("desc")
+      .take(50);
+
+    const dashboardSets = await Promise.all(
+      sets.map(async (set) => {
+        const breakdown =
+          set.currentBreakdownId === undefined
+            ? null
+            : await ctx.db.get(set.currentBreakdownId);
+        const currentBreakdown =
+          breakdown !== null && breakdown?.setId === set._id ? breakdown : null;
+        const playbackSources = await ctx.db
+          .query("playbackSources")
+          .withIndex("by_setId_and_isActive", (q) => q.eq("setId", set._id))
+          .take(20);
+        const ingestJob = (
+          await ctx.db
+            .query("ingestJobs")
+            .withIndex("by_setId", (q) => q.eq("setId", set._id))
+            .order("desc")
+            .take(5)
+        )[0] ?? null;
+        const stepAttempts =
+          ingestJob === null
+            ? []
+            : await ctx.db
+                .query("ingestStepAttempts")
+                .withIndex("by_ingestJobId", (q) => q.eq("ingestJobId", ingestJob._id))
+                .take(100);
+        const artifacts =
+          ingestJob === null
+            ? []
+            : await ctx.db
+                .query("ingestArtifacts")
+                .withIndex("by_ingestJobId", (q) => q.eq("ingestJobId", ingestJob._id))
+                .take(100);
+        const lines =
+          currentBreakdown === null
+            ? []
+            : await ctx.db
+                .query("lines")
+                .withIndex("by_breakdownId_and_ordinal", (q) =>
+                  q.eq("breakdownId", currentBreakdown._id),
+                )
+                .take(2_000);
+        const laughRegions =
+          currentBreakdown === null
+            ? []
+            : await ctx.db
+                .query("laughRegions")
+                .withIndex("by_breakdownId_and_ordinal", (q) =>
+                  q.eq("breakdownId", currentBreakdown._id),
+                )
+                .take(4_000);
+        const uploadSession =
+          uploadSessions.find((session) => session.confirmedSetId === set._id) ?? null;
+        const activePlaybackSource =
+          playbackSources.find((playbackSource) => playbackSource.isActive) ?? null;
+
+        return {
+          _id: set._id,
+          _creationTime: set._creationTime,
+          activePlaybackSource: activePlaybackSource
+            ? {
+                _id: activePlaybackSource._id,
+                isActive: activePlaybackSource.isActive,
+                kind: activePlaybackSource.kind,
+                playbackId: activePlaybackSource.playbackId,
+                provider: activePlaybackSource.provider,
+                providerAssetId: activePlaybackSource.providerAssetId,
+                providerUploadId: activePlaybackSource.providerUploadId ?? null,
+              }
+            : null,
+          breakdown:
+            currentBreakdown === null
+              ? null
+              : {
+                  _id: currentBreakdown._id,
+                  editability: currentBreakdown.editability,
+                  laughFailureCode: currentBreakdown.laughFailureCode ?? null,
+                  laughFailureDetail: currentBreakdown.laughFailureDetail ?? null,
+                  laughSeedingState: currentBreakdown.laughSeedingState,
+                  lineFailureCode: currentBreakdown.lineFailureCode ?? null,
+                  lineFailureDetail: currentBreakdown.lineFailureDetail ?? null,
+                  lineSeedingState: currentBreakdown.lineSeedingState,
+                },
+          ingestJob:
+            ingestJob === null
+              ? null
+              : {
+                  _id: ingestJob._id,
+                  activePlaybackMigrationStep:
+                    ingestJob.activePlaybackMigrationStep ?? null,
+                  artifacts: artifacts.map((artifact) => ({
+                    _id: artifact._id,
+                    contentType: artifact.contentType ?? null,
+                    createdByAttemptId: artifact.createdByAttemptId ?? null,
+                    expiresAt: artifact.expiresAt ?? null,
+                    fileName: artifact.fileName,
+                    isCanonical: artifact.isCanonical,
+                    kind: artifact.kind,
+                    path: artifact.path,
+                    size: artifact.size ?? null,
+                    stepName: artifact.stepName,
+                  })),
+                  completedAt: ingestJob.completedAt ?? null,
+                  failedAt: ingestJob.failedAt ?? null,
+                  status: ingestJob.status,
+                  stepAttempts: stepAttempts.map((attempt) => ({
+                    _id: attempt._id,
+                    attemptNumber: attempt.attemptNumber,
+                    failureCode: attempt.failureCode ?? null,
+                    failureDetail: attempt.failureDetail ?? null,
+                    finishedAt: attempt.finishedAt ?? null,
+                    modalFunctionCallId: attempt.modalFunctionCallId ?? null,
+                    runner: attempt.runner,
+                    startedAt: attempt.startedAt,
+                    status: attempt.status,
+                    stepName: attempt.stepName,
+                    workflowEventName: attempt.workflowEventName ?? null,
+                  })),
+                  workflowId: ingestJob.workflowId ?? null,
+                },
+          lineCount: lines.length,
+          laughRegionCount: laughRegions.length,
+          playbackSources: playbackSources.map((playbackSource) => ({
+            _id: playbackSource._id,
+            isActive: playbackSource.isActive,
+            kind: playbackSource.kind,
+            playbackId: playbackSource.playbackId,
+            provider: playbackSource.provider,
+            providerAssetId: playbackSource.providerAssetId,
+            providerUploadId: playbackSource.providerUploadId ?? null,
+          })),
+          setStatus: set.setStatus,
+          title: set.title,
+          trimRangeEndSeconds: set.trimRangeEndSeconds,
+          trimRangeStartSeconds: set.trimRangeStartSeconds,
+          uploadSession:
+            uploadSession === null
+              ? null
+              : {
+                  _id: uploadSession._id,
+                  durationSeconds: uploadSession.durationSeconds ?? null,
+                  failureCode: uploadSession.failureCode ?? null,
+                  muxAssetId: uploadSession.muxAssetId ?? null,
+                  muxPlaybackId: uploadSession.muxPlaybackId ?? null,
+                  muxUploadId: uploadSession.muxUploadId,
+                  originalFileName: uploadSession.originalFileName,
+                  status: uploadSession.status,
+                },
+        };
+      }),
+    );
+
+    const activePlaybackSources = dashboardSets.flatMap((set) =>
+      set.playbackSources.filter((playbackSource) => playbackSource.isActive),
+    );
+
+    return {
+      recentUploadSessions: uploadSessions.map((uploadSession) => ({
+        _id: uploadSession._id,
+        confirmedSetId: uploadSession.confirmedSetId ?? null,
+        durationSeconds: uploadSession.durationSeconds ?? null,
+        failureCode: uploadSession.failureCode ?? null,
+        muxAssetId: uploadSession.muxAssetId ?? null,
+        muxPlaybackId: uploadSession.muxPlaybackId ?? null,
+        muxUploadId: uploadSession.muxUploadId,
+        originalFileName: uploadSession.originalFileName,
+        status: uploadSession.status,
+      })),
+      sets: dashboardSets,
+      summary: {
+        activeBunnySourceCount: activePlaybackSources.filter(
+          (playbackSource) => playbackSource.provider === "bunny",
+        ).length,
+        activeMuxSourceCount: activePlaybackSources.filter(
+          (playbackSource) => playbackSource.provider === "mux",
+        ).length,
+        activePlaybackSourceCount: activePlaybackSources.length,
+        editableBreakdownCount: dashboardSets.filter(
+          (set) => set.breakdown?.editability === "editable",
+        ).length,
+        failedBreakdownCount: dashboardSets.filter(
+          (set) =>
+            set.breakdown?.lineSeedingState === "failed" ||
+            set.breakdown?.laughSeedingState === "failed",
+        ).length,
+        pendingUploadSessionCount: uploadSessions.filter(
+          (uploadSession) => uploadSession.status !== "confirmed",
+        ).length,
+        playableSetCount: dashboardSets.filter((set) => set.setStatus === "playable")
+          .length,
+        setCount: dashboardSets.length,
+        unavailableSetCount: dashboardSets.filter(
+          (set) => set.setStatus === "unavailable",
+        ).length,
+        uploadSessionCount: uploadSessions.length,
+      },
+      viewerEmail: identity.email ?? null,
+    };
+  },
+});
+
+export const getSetPageForViewer = query({
+  args: {
+    setId: v.id("sets"),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity === null) {
+      return null;
+    }
+
+    const tokenIdentifier = identity.tokenIdentifier;
+    const set = await ctx.db.get(args.setId);
+
+    if (set === null || set.ownerTokenIdentifier !== tokenIdentifier) {
+      return null;
+    }
+
+    const breakdown =
+      set.currentBreakdownId === undefined
+        ? null
+        : await ctx.db.get(set.currentBreakdownId);
+    const activePlaybackSource = await getActivePlaybackSource(ctx, set._id);
+    const currentBreakdown =
+      breakdown !== null && breakdown?.setId === set._id ? breakdown : null;
+
+    let analysisData = null;
+    if (currentBreakdown !== null) {
+      const lines = await ctx.db
+        .query("lines")
+        .withIndex("by_breakdownId_and_ordinal", (q) =>
+          q.eq("breakdownId", currentBreakdown._id),
+        )
+        .take(2_000);
+      const laughRegions = await ctx.db
+        .query("laughRegions")
+        .withIndex("by_breakdownId_and_ordinal", (q) =>
+          q.eq("breakdownId", currentBreakdown._id),
+        )
+        .take(4_000);
+
+      if (lines.length > 0) {
+        const laughsByLineId = new Map<
+          Id<"lines">,
+          Array<{
+            index: number;
+            start_time: number;
+            end_time: number;
+            duration: number;
+            intensity_score: number;
+          }>
+        >();
+
+        for (const laughRegion of laughRegions) {
+          const existing = laughsByLineId.get(laughRegion.lineId) ?? [];
+          existing.push({
+            index: existing.length + 1,
+            start_time: laughRegion.startSeconds,
+            end_time: laughRegion.endSeconds,
+            duration: Math.max(
+              0,
+              laughRegion.endSeconds - laughRegion.startSeconds,
+            ),
+            intensity_score: laughRegion.intensityScore,
+          });
+          laughsByLineId.set(laughRegion.lineId, existing);
+        }
+
+        const sentences = lines.map((line) => ({
+          index: line.ordinal,
+          start: line.startSeconds,
+          end: line.endSeconds,
+          text: line.text,
+          laugh_count: line.laughCount,
+          laugh_intensity_score: line.laughIntensityScore,
+          laughs: laughsByLineId.get(line._id) ?? [],
+        }));
+        const segments = laughRegions.map((laughRegion) => ({
+          index: laughRegion.ordinal,
+          start_time: laughRegion.startSeconds,
+          end_time: laughRegion.endSeconds,
+          duration: Math.max(
+            0,
+            laughRegion.endSeconds - laughRegion.startSeconds,
+          ),
+          intensity_score: laughRegion.intensityScore,
+        }));
+
+        analysisData = {
+          version: "1.1.0",
+          generatedAt:
+            Math.max(
+              currentBreakdown.lineSeededAt ?? 0,
+              currentBreakdown.laughSeededAt ?? 0,
+            ) || currentBreakdown._creationTime,
+          sampleRate: 0,
+          totalDuration: Math.max(
+            set.trimRangeEndSeconds - set.trimRangeStartSeconds,
+            lines[lines.length - 1]?.endSeconds ?? 0,
+            laughRegions[laughRegions.length - 1]?.endSeconds ?? 0,
+          ),
+          segmentCount: segments.length,
+          transcriptText: composeTranscriptText(sentences),
+          sentences,
+          segments,
+          chapters: [],
+          comments: [],
+        };
+      }
+    }
+
+    return {
+      _id: set._id,
+      title: set.title,
+      trimRangeStartSeconds: set.trimRangeStartSeconds,
+      trimRangeEndSeconds: set.trimRangeEndSeconds,
+      activePlaybackSource: activePlaybackSource
+        ? {
+            _id: activePlaybackSource._id,
+            provider: activePlaybackSource.provider,
+            kind: activePlaybackSource.kind,
+            playbackId: activePlaybackSource.playbackId,
+            playbackMode: activePlaybackSource.playbackMode ?? ("hls" as const),
+            playbackUrl:
+              activePlaybackSource.provider === "mux"
+                ? `https://stream.mux.com/${activePlaybackSource.playbackId}.m3u8`
+                : activePlaybackSource.playbackId,
+          }
+        : null,
+      breakdown:
+        currentBreakdown === null
+          ? null
+          : {
+              _id: currentBreakdown._id,
+              editability: currentBreakdown.editability,
+              lineSeedingState: currentBreakdown.lineSeedingState,
+              laughSeedingState: currentBreakdown.laughSeedingState,
+              lineFailureCode: currentBreakdown.lineFailureCode ?? null,
+              laughFailureCode: currentBreakdown.laughFailureCode ?? null,
+            },
+      analysisData,
+    };
+  },
+});
+
 export const startUploadSession = mutation({
   args: {
-    mediaKind: v.union(v.literal("audio"), v.literal("video")),
     muxUploadId: v.string(),
     originalFileName: v.string(),
   },
@@ -183,7 +649,6 @@ export const startUploadSession = mutation({
     const uploadSessionId = await ctx.db.insert("uploadSessions", {
       ownerTokenIdentifier: tokenIdentifier,
       muxUploadId: args.muxUploadId,
-      mediaKind: args.mediaKind,
       originalFileName: args.originalFileName.trim(),
       status: "waitingForUpload",
     });
@@ -296,6 +761,12 @@ export const confirmUploadSession = mutation({
       currentBreakdownId: breakdownId,
     });
 
+    const ingestJobId = await ctx.db.insert("ingestJobs", {
+      breakdownId,
+      setId,
+      status: "pending",
+    });
+
     const playbackSourceId = await ctx.db.insert("playbackSources", {
       setId,
       provider: "mux",
@@ -304,7 +775,6 @@ export const confirmUploadSession = mutation({
       playbackId: args.muxPlaybackId.trim(),
       providerAssetId: args.muxAssetId.trim(),
       providerUploadId: uploadSession.muxUploadId,
-      mediaKind: uploadSession.mediaKind,
     });
 
     await ctx.db.patch("uploadSessions", args.uploadSessionId, {
@@ -316,7 +786,34 @@ export const confirmUploadSession = mutation({
       confirmedSetId: setId,
     });
 
-    return { breakdownId, playbackSourceId, setId };
+    await ctx.runMutation(internal.setIngest.startSetIngest, {
+      ingestJobId,
+    });
+
+    return { breakdownId, ingestJobId, playbackSourceId, setId };
+  },
+});
+
+export const getBreakdownInternal = internalQuery({
+  args: {
+    breakdownId: v.id("breakdowns"),
+  },
+  handler: async (ctx, args) => {
+    return ctx.db.get(args.breakdownId);
+  },
+});
+
+export const getBreakdownLinesInternal = internalQuery({
+  args: {
+    breakdownId: v.id("breakdowns"),
+  },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("lines")
+      .withIndex("by_breakdownId_and_ordinal", (q) =>
+        q.eq("breakdownId", args.breakdownId),
+      )
+      .take(2_000);
   },
 });
 
@@ -343,7 +840,6 @@ export const getUploadSessionForViewer = query({
       _id: uploadSession._id,
       durationSeconds: uploadSession.durationSeconds ?? null,
       failureCode: uploadSession.failureCode ?? null,
-      mediaKind: uploadSession.mediaKind,
       muxAssetId: uploadSession.muxAssetId ?? null,
       muxPlaybackId: uploadSession.muxPlaybackId ?? null,
       muxUploadId: uploadSession.muxUploadId,
@@ -413,7 +909,6 @@ export const markUploadSessionProcessing = internalMutation({
 export const markUploadSessionReadyForTrim = internalMutation({
   args: {
     durationSeconds: v.number(),
-    mediaKind: v.union(v.literal("audio"), v.literal("video")),
     muxAssetId: v.string(),
     muxPlaybackId: v.string(),
     muxUploadId: v.optional(v.string()),
@@ -441,7 +936,6 @@ export const markUploadSessionReadyForTrim = internalMutation({
     await ctx.db.patch("uploadSessions", uploadSession._id, {
       durationSeconds: args.durationSeconds,
       failureCode: undefined,
-      mediaKind: args.mediaKind,
       muxAssetId: args.muxAssetId,
       muxPlaybackId: args.muxPlaybackId,
       status: "readyForTrim",

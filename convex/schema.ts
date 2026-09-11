@@ -28,7 +28,61 @@ const breakdownEditabilityValidator = v.union(
   v.literal("editable"),
 );
 
-const mediaKindValidator = v.union(v.literal("audio"), v.literal("video"));
+const ingestJobStatusValidator = v.union(
+  v.literal("pending"),
+  v.literal("running"),
+  v.literal("completed"),
+  v.literal("failed"),
+);
+
+const ingestStepNameValidator = v.union(
+  v.literal("prepareRetainedMedia"),
+  v.literal("startBunnyPlaybackMigration"),
+  v.literal("awaitBunnyPlaybackReady"),
+  v.literal("cleanupMuxPlayback"),
+  v.literal("transcribeWords"),
+  v.literal("normalizeLines"),
+  v.literal("preprocessLaughAudio"),
+  v.literal("detectLaughCandidates"),
+  v.literal("normalizeLaughRegions"),
+);
+
+const ingestStepStatusValidator = v.union(
+  v.literal("pending"),
+  v.literal("running"),
+  v.literal("succeeded"),
+  v.literal("failed"),
+);
+
+const ingestStepRunnerValidator = v.union(
+  v.literal("convex"),
+  v.literal("modal"),
+);
+
+const ingestArtifactKindValidator = v.union(
+  v.literal("retainedMedia"),
+  v.literal("playbackMedia"),
+  v.literal("cleanedAudio"),
+  v.literal("transcriptRaw"),
+  v.literal("laughCandidatesRaw"),
+  v.literal("linesNormalized"),
+  v.literal("laughRegionsNormalized"),
+);
+
+const ingestFailureCodeValidator = v.union(
+  v.literal("artifact_missing"),
+  v.literal("artifact_invalid"),
+  v.literal("external_worker_unavailable"),
+  v.literal("external_worker_failed"),
+  v.literal("modal_spawn_failed"),
+  v.literal("mux_migration_failed"),
+  v.literal("bunny_upload_failed"),
+  v.literal("line_normalization_failed"),
+  v.literal("laugh_detection_failed"),
+  v.literal("laugh_normalization_failed"),
+  v.literal("internal"),
+);
+
 const appErrorCodeValidator = v.union(
   v.literal("validation"),
   v.literal("auth"),
@@ -56,6 +110,8 @@ const playbackSourceKindValidator = v.union(
   v.literal("persistent"),
 );
 
+const playbackModeValidator = v.union(v.literal("direct"), v.literal("hls"));
+
 export default defineSchema({
   sets: defineTable({
     ownerTokenIdentifier: v.string(),
@@ -70,16 +126,89 @@ export default defineSchema({
     lineSeedingState: lineSeedingStateValidator,
     laughSeedingState: laughSeedingStateValidator,
     editability: breakdownEditabilityValidator,
-    lineFailureReason: v.optional(v.string()),
-    laughFailureReason: v.optional(v.string()),
+    lineFailureCode: v.optional(ingestFailureCodeValidator),
+    laughFailureCode: v.optional(ingestFailureCodeValidator),
+    lineFailureDetail: v.optional(v.string()),
+    laughFailureDetail: v.optional(v.string()),
+    lineSeededAt: v.optional(v.number()),
+    laughSeededAt: v.optional(v.number()),
+    editableAt: v.optional(v.number()),
   }).index("by_setId", ["setId"]),
+  lines: defineTable({
+    breakdownId: v.id("breakdowns"),
+    ordinal: v.number(),
+    startSeconds: v.number(),
+    endSeconds: v.number(),
+    text: v.string(),
+    wordCount: v.number(),
+    laughCount: v.number(),
+    laughIntensityScore: v.number(),
+  })
+    .index("by_breakdownId_and_ordinal", ["breakdownId", "ordinal"])
+    .index("by_breakdownId_and_startSeconds", ["breakdownId", "startSeconds"]),
+  laughRegions: defineTable({
+    breakdownId: v.id("breakdowns"),
+    lineId: v.id("lines"),
+    ordinal: v.number(),
+    startSeconds: v.number(),
+    endSeconds: v.number(),
+    intensityScore: v.number(),
+  })
+    .index("by_breakdownId_and_ordinal", ["breakdownId", "ordinal"])
+    .index("by_breakdownId_and_startSeconds", ["breakdownId", "startSeconds"])
+    .index("by_lineId_and_ordinal", ["lineId", "ordinal"]),
+  ingestJobs: defineTable({
+    setId: v.id("sets"),
+    breakdownId: v.id("breakdowns"),
+    workflowId: v.optional(v.string()),
+    status: ingestJobStatusValidator,
+    activePlaybackMigrationStep: v.optional(ingestStepNameValidator),
+    completedAt: v.optional(v.number()),
+    failedAt: v.optional(v.number()),
+  })
+    .index("by_setId", ["setId"])
+    .index("by_breakdownId", ["breakdownId"])
+    .index("by_workflowId", ["workflowId"]),
+  ingestStepAttempts: defineTable({
+    ingestJobId: v.id("ingestJobs"),
+    stepName: ingestStepNameValidator,
+    attemptNumber: v.number(),
+    runner: ingestStepRunnerValidator,
+    status: ingestStepStatusValidator,
+    workflowEventName: v.optional(v.string()),
+    modalFunctionCallId: v.optional(v.string()),
+    failureCode: v.optional(ingestFailureCodeValidator),
+    failureDetail: v.optional(v.string()),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+  })
+    .index("by_ingestJobId", ["ingestJobId"])
+    .index("by_ingestJobId_and_stepName", ["ingestJobId", "stepName"])
+    .index("by_ingestJobId_and_stepName_and_attemptNumber", [
+      "ingestJobId",
+      "stepName",
+      "attemptNumber",
+    ]),
+  ingestArtifacts: defineTable({
+    ingestJobId: v.id("ingestJobs"),
+    stepName: ingestStepNameValidator,
+    kind: ingestArtifactKindValidator,
+    path: v.string(),
+    fileName: v.string(),
+    contentType: v.optional(v.string()),
+    size: v.optional(v.number()),
+    isCanonical: v.boolean(),
+    expiresAt: v.optional(v.number()),
+    createdByAttemptId: v.optional(v.id("ingestStepAttempts")),
+  })
+    .index("by_ingestJobId", ["ingestJobId"])
+    .index("by_ingestJobId_and_kind", ["ingestJobId", "kind"]),
   uploadSessions: defineTable({
     ownerTokenIdentifier: v.string(),
     muxUploadId: v.string(),
     muxAssetId: v.optional(v.string()),
     muxPlaybackId: v.optional(v.string()),
     durationSeconds: v.optional(v.number()),
-    mediaKind: mediaKindValidator,
     originalFileName: v.string(),
     status: uploadSessionStatusValidator,
     failureCode: v.optional(appErrorCodeValidator),
@@ -94,8 +223,8 @@ export default defineSchema({
     kind: playbackSourceKindValidator,
     isActive: v.boolean(),
     playbackId: v.string(),
+    playbackMode: v.optional(playbackModeValidator),
     providerAssetId: v.string(),
     providerUploadId: v.optional(v.string()),
-    mediaKind: mediaKindValidator,
   }).index("by_setId_and_isActive", ["setId", "isActive"]),
 });

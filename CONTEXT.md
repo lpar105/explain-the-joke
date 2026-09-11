@@ -5,7 +5,7 @@ Tight Five is a performance review product for standup comedians. It organizes u
 ## Language
 
 **Set**:
-One retained audio or video performance recording in a user's library with a stable identity.
+One retained video performance recording in a user's library with a stable identity.
 _Avoid_: Upload, file, clip, recording
 
 **Breakdown**:
@@ -51,10 +51,6 @@ _Avoid_: Job status, pipeline state
 **Metadata Field**:
 A user-defined labeled value attached to a set or chapter, with performance date as the only built-in default field at the set level.
 _Avoid_: Schema field, system property
-
-**Trash Window**:
-The three-day retention period after a user intentionally deletes a set and before it is permanently removed.
-_Avoid_: Soft delete, archive period
 
 **Shared Review**:
 A set another user can access through a share link and revisit later from their own account.
@@ -108,7 +104,6 @@ _Avoid_: Trial grace window, billing retry
 - A **Username** resolves to one user account, but sharing grants belong to the underlying account identity
 - A user account has exactly one current **Plan**
 - A free-plan user has a 30-minute **Lifetime Upload Quota**
-- A user-intentionally deleted **Set** remains recoverable during its **Trash Window**
 - When a paid user stops paying, their owned **Set** library is locked during the **Resubscribe Window**
 - If a paid user does not resubscribe during the **Resubscribe Window**, their owned **Set** library is permanently removed at the end of that window
 - A free user who has exhausted their **Lifetime Upload Quota** keeps access to existing owned sets but cannot upload additional set duration
@@ -136,9 +131,6 @@ _Avoid_: Trial grace window, billing retry
 >
 > **Dev:** "Does the comic need to know which vendor is serving playback right now?"
 > **Domain expert:** "No; the **Set** stays stable in the product while its active **Playback Source** can change behind the scenes."
->
-> **Dev:** "Can a **Set** be audio-only?"
-> **Domain expert:** "Yes; a **Set** is a performance recording, so audio-only and video recordings both use the same review model."
 >
 > **Dev:** "Can the comic rerun analysis on a **Set** after upload?"
 > **Domain expert:** "No; reprocessing is not a user-facing workflow in the product, and the comic works against the current **Breakdown**."
@@ -172,9 +164,6 @@ _Avoid_: Trial grace window, billing retry
 >
 > **Dev:** "Who owns a **Bit**?"
 > **Domain expert:** "A **Bit** belongs to the comedian who owns the set; collaborators can discuss material but do not own the comic's reusable catalog."
->
-> **Dev:** "Is deleting a **Set** immediate and permanent?"
-> **Domain expert:** "No; a deleted **Set** enters a three-day **Trash Window** before permanent removal."
 >
 > **Dev:** "After a reviewer signs in through a **Share Link**, can they only return with the original URL?"
 > **Domain expert:** "No; that access should persist as a **Shared Review** the reviewer can revisit from their own account."
@@ -228,7 +217,7 @@ _Avoid_: Trial grace window, billing retry
 > **Domain expert:** "A **Laugh Region** stores a decimal intensity value under the hood, but the comic edits it using human-facing grades like A+, A, B, C, or F."
 >
 > **Dev:** "Can one **Set** contain multiple uploaded source files?"
-> **Domain expert:** "No; in v1 a **Set** is built from one contiguous uploaded audio or video file."
+> **Domain expert:** "No; in v1 a **Set** is built from one contiguous uploaded video file."
 >
 > **Dev:** "Is transcript content searchable in the library?"
 > **Domain expert:** "Yes; transcript content and user-defined metadata are both searchable, but they should be queried through explicit scoped search rather than treated as one undifferentiated search surface."
@@ -268,9 +257,6 @@ _Avoid_: Trial grace window, billing retry
 >
 > **Dev:** "Do **Share Links** expire automatically?"
 > **Domain expert:** "No; access continues until the owner revokes it or the underlying **Set** disappears."
->
-> **Dev:** "Does deleting a **Set** give back free upload capacity?"
-> **Domain expert:** "No; the free plan uses a 30-minute **Lifetime Upload Quota**, so permanently removed sets still count against what that account has uploaded."
 >
 > **Dev:** "What happens when a paid user downgrades?"
 > **Domain expert:** "Downgrading does not put them back under the free upload trial model; instead their sets enter a seven-day **Resubscribe Window** where those sets are locked while they can still resubscribe."
@@ -342,4 +328,3 @@ _Avoid_: Trial grace window, billing retry
 
 - "rerun analysis" is not a product capability for comics; any reprocessing belongs to internal development or testing workflows, not the user-facing domain model.
 - "ready" is overloaded: a **Set** can be playable before its **Breakdown** is complete, so playback readiness and analysis readiness must not be conflated.
-- **Trash Window** and **Resubscribe Window** are different: the **Trash Window** applies only to intentional deletion by the user, while the **Resubscribe Window** is a seven-day payment-recovery lockout after a paid user stops paying.
