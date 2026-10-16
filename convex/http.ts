@@ -41,6 +41,7 @@ type ModalCallbackPayload = {
     kind:
       | "retainedMedia"
       | "playbackMedia"
+      | "thumbnail"
       | "cleanedAudio"
       | "transcriptRaw"
       | "laughCandidatesRaw"

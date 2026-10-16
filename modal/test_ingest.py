@@ -100,6 +100,13 @@ class PrepareRetainedMediaTests(unittest.TestCase):
                     key="playback.mp4",
                     kind="playbackMedia",
                 ),
+                ingest.Artifact(
+                    contentType="image/jpeg",
+                    fileName="thumbnail.jpg",
+                    isCanonical=True,
+                    key="thumbnail.jpg",
+                    kind="thumbnail",
+                ),
             ],
             setId="set-id",
             stepName="prepareRetainedMedia",
@@ -114,13 +121,17 @@ class PrepareRetainedMediaTests(unittest.TestCase):
 
         ingest._prepare_retained_media_impl(payload)
 
-        self.assertEqual(run_ffmpeg.call_count, 2)
-        for ffmpeg_call in run_ffmpeg.call_args_list:
+        self.assertEqual(run_ffmpeg.call_count, 3)
+        for ffmpeg_call in run_ffmpeg.call_args_list[:2]:
             args = ffmpeg_call.args[0]
             self.assertLess(args.index("-i"), args.index("-ss"))
             self.assertNotIn("-to", args)
             self.assertEqual(args[args.index("-ss") + 1], "3.415")
             self.assertEqual(args[args.index("-t") + 1], "36.252")
+
+        thumbnail_args = run_ffmpeg.call_args_list[2].args[0]
+        self.assertEqual(thumbnail_args[thumbnail_args.index("-ss") + 1], "4.415")
+        self.assertEqual(thumbnail_args[thumbnail_args.index("-frames:v") + 1], "1")
 
 if __name__ == "__main__":
     unittest.main()

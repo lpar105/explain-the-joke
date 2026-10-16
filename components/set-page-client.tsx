@@ -2,13 +2,21 @@
 
 import Hls from "hls.js";
 import { useMemo, useRef, useState, useEffect } from "react";
-import { LoaderCircle, Pause, Play } from "lucide-react";
+import { Check, LoaderCircle, Pause, Play, TriangleAlert } from "lucide-react";
 import { useQuery } from "convex/react";
 import Link from "next/link";
 
 import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import type { SetAnalysisData, TranscriptSentence } from "../lib/setAnalysis";
+import {
+  getEffectivePathState,
+  getOverallProgressLabel,
+  getTrackLabel,
+  isPathProcessing,
+  type BreakdownPathState,
+  type BreakdownTrack,
+} from "../lib/breakdown-progress";
 import {
   clampTime,
   getClipDurationSeconds,
@@ -49,6 +57,205 @@ function getSelectedLine(
     (sentence) => sentence.start <= currentTime,
   );
   return startedSentences[startedSentences.length - 1] ?? sentences[0];
+}
+
+function ProgressSegment({ state }: { state: BreakdownPathState }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`h-full flex-1 border-r border-tf-ink last:border-r-0 ${
+        state === "ready"
+          ? "bg-tf-blue"
+          : state === "failed"
+            ? "bg-tf-red"
+            : isPathProcessing(state)
+              ? "tf-progress-active"
+              : "bg-tf-paper-alt"
+      }`}
+    />
+  );
+}
+
+function ProgressRail({
+  transcriptState,
+  laughState,
+}: {
+  transcriptState: BreakdownPathState;
+  laughState: BreakdownPathState;
+}) {
+  return (
+    <div
+      className="flex h-3 overflow-hidden border-2 border-tf-ink bg-tf-paper-alt"
+      aria-hidden="true"
+    >
+      <ProgressSegment state={transcriptState} />
+      <ProgressSegment state={laughState} />
+    </div>
+  );
+}
+
+function TrackStateIcon({ state }: { state: BreakdownPathState }) {
+  if (state === "ready") {
+    return <Check className="size-4 text-tf-blue" aria-hidden="true" />;
+  }
+
+  if (state === "failed") {
+    return <TriangleAlert className="size-4 text-tf-red" aria-hidden="true" />;
+  }
+
+  return (
+    <span
+      className="size-2 shrink-0 animate-pulse bg-tf-blue motion-reduce:animate-none"
+      aria-hidden="true"
+    />
+  );
+}
+
+function TrackStatus({
+  name,
+  state,
+  track,
+}: {
+  name: string;
+  state: BreakdownPathState;
+  track: BreakdownTrack;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 border border-tf-ink bg-white px-2.5 py-2">
+      <div className="flex items-center gap-2">
+        <TrackStateIcon state={state} />
+        <span className="text-[10px] font-black uppercase tracking-[0.16em] text-tf-ink">
+          {name}
+        </span>
+      </div>
+      <span className="text-right font-mono text-[9px] text-tf-ink-muted">
+        {getTrackLabel(track, state)}
+      </span>
+    </div>
+  );
+}
+
+function BreakdownStatusPanel({
+  className = "",
+  laughState,
+  transcriptState,
+}: {
+  className?: string;
+  laughState: BreakdownPathState;
+  transcriptState: BreakdownPathState;
+}) {
+  const isBusy =
+    isPathProcessing(transcriptState) || isPathProcessing(laughState);
+
+  return (
+    <aside
+      className={`flex min-h-0 flex-col border-tf bg-white shadow-tf-card ${className}`}
+    >
+      <div className="border-b-2 border-tf-ink bg-tf-paper-alt px-3 py-2.5">
+        <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-tf-ink-muted">
+          Breakdown Status
+        </p>
+        <p className="mt-1 text-sm font-black uppercase tracking-[0.08em] text-tf-ink">
+          {getOverallProgressLabel(transcriptState, laughState)}
+        </p>
+        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {getOverallProgressLabel(transcriptState, laughState)}. Transcript:{" "}
+          {getTrackLabel("transcript", transcriptState)}. Laugh analysis:{" "}
+          {getTrackLabel("laughs", laughState)}.
+        </p>
+      </div>
+
+      <div className="space-y-2 p-3" aria-busy={isBusy}>
+        <ProgressRail
+          transcriptState={transcriptState}
+          laughState={laughState}
+        />
+        <TrackStatus
+          name="Transcript"
+          state={transcriptState}
+          track="transcript"
+        />
+        <TrackStatus name="Laugh analysis" state={laughState} track="laughs" />
+        <p className="pt-1 font-mono text-[9px] leading-4 text-tf-ink-muted">
+          You can leave this page—processing will continue.
+        </p>
+      </div>
+
+      {isPathProcessing(transcriptState) ? (
+        <div className="flex-1 space-y-1 border-t-2 border-tf-ink bg-neutral-50 p-2" aria-hidden="true">
+          {["w-4/5", "w-full", "w-3/4", "w-11/12", "w-2/3"].map(
+            (width, index) => (
+              <div
+                key={index}
+                className="border border-tf-ink bg-white px-2 py-2.5"
+              >
+                <div className={`h-2 bg-tf-paper-alt ${width}`} />
+                <div className="mt-2 h-2 w-full bg-tf-paper-alt" />
+              </div>
+            ),
+          )}
+        </div>
+      ) : null}
+    </aside>
+  );
+}
+
+function CompactBreakdownStatus({
+  laughState,
+  transcriptState,
+}: {
+  laughState: BreakdownPathState;
+  transcriptState: BreakdownPathState;
+}) {
+  const isBusy =
+    isPathProcessing(transcriptState) || isPathProcessing(laughState);
+
+  return (
+    <div className="border-b-2 border-tf-ink bg-tf-paper-alt px-2.5 py-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-tf-ink">
+          {getOverallProgressLabel(transcriptState, laughState)}
+        </p>
+        <p className="font-mono text-[9px] text-tf-ink-muted">
+          {transcriptState === "ready"
+            ? getTrackLabel("laughs", laughState)
+            : getTrackLabel("transcript", transcriptState)}
+        </p>
+      </div>
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {getOverallProgressLabel(transcriptState, laughState)}. Transcript:{" "}
+        {getTrackLabel("transcript", transcriptState)}. Laugh analysis:{" "}
+        {getTrackLabel("laughs", laughState)}.
+      </p>
+      <div className="mt-1.5" aria-busy={isBusy}>
+        <ProgressRail
+          transcriptState={transcriptState}
+          laughState={laughState}
+        />
+      </div>
+    </div>
+  );
+}
+
+function BreakdownTimelineSkeleton() {
+  return (
+    <div className="space-y-3" aria-hidden="true">
+      <div className="border-tf bg-white p-2 shadow-tf-card">
+        <div className="mb-1 flex items-center justify-between gap-3 px-0.5">
+          <span className="h-2 w-8 bg-tf-paper-alt" />
+          <span className="font-mono text-[9px] font-black uppercase tracking-tf-ui text-tf-ink-muted">
+            Timeline pending
+          </span>
+          <span className="h-2 w-8 bg-tf-paper-alt" />
+        </div>
+        <div className="h-8 border-tf-subtle bg-tf-paper-alt" />
+      </div>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <div className="h-10 border-2 border-tf-ink bg-tf-paper-alt" />
+        <div className="h-10 border-2 border-tf-ink bg-tf-paper-alt" />
+      </div>
+    </div>
+  );
 }
 
 function useHlsPlayback(
@@ -247,11 +454,15 @@ function ReadOnlyTimeline({
 function LinePanel({
   data,
   currentTime,
+  laughState,
   onSeek,
+  transcriptState,
 }: {
   data: SetAnalysisData;
   currentTime: number;
+  laughState: BreakdownPathState;
   onSeek: (time: number) => void;
+  transcriptState: BreakdownPathState;
 }) {
   const [filter, setFilter] = useState<"all" | "laughs">("all");
   const [sortMode, setSortMode] = useState<"timeline" | "intensity">(
@@ -315,6 +526,15 @@ function LinePanel({
           </button>
         </div>
       </div>
+
+      {laughState !== "ready" ? (
+        <div className="hidden lg:block">
+          <CompactBreakdownStatus
+            transcriptState={transcriptState}
+            laughState={laughState}
+          />
+        </div>
+      ) : null}
 
       <div className="flex-1 space-y-0.5 overflow-y-auto bg-neutral-50 p-1.5">
         {displaySentences.length === 0 ? (
@@ -471,6 +691,18 @@ export default function SetPageClient({ setId }: { setId: string }) {
     () => set?.analysisData ?? null,
     [set],
   );
+  const transcriptState: BreakdownPathState = analysisData
+    ? "ready"
+    : getEffectivePathState(
+        set?.breakdown?.lineSeedingState ?? "pending",
+        set?.ingestJobStatus ?? null,
+      );
+  const laughState = getEffectivePathState(
+    set?.breakdown?.laughSeedingState ?? "pending",
+    set?.ingestJobStatus ?? null,
+  );
+  const showBreakdownStatus =
+    transcriptState !== "ready" || laughState !== "ready";
   const laughLines = useMemo(
     () =>
       analysisData?.sentences.filter((sentence) => sentence.laugh_count > 0) ?? [],
@@ -674,6 +906,27 @@ export default function SetPageClient({ setId }: { setId: string }) {
                   )}
                 </div>
 
+                {showBreakdownStatus ? (
+                  <div className="lg:hidden">
+                    {analysisData ? (
+                      <div className="border-tf bg-white shadow-tf-card">
+                        <CompactBreakdownStatus
+                          transcriptState={transcriptState}
+                          laughState={laughState}
+                        />
+                        <p className="px-2.5 py-2 font-mono text-[9px] leading-4 text-tf-ink-muted">
+                          You can leave this page—processing will continue.
+                        </p>
+                      </div>
+                    ) : (
+                      <BreakdownStatusPanel
+                        transcriptState={transcriptState}
+                        laughState={laughState}
+                      />
+                    )}
+                  </div>
+                ) : null}
+
                 {analysisData ? (
                   <>
                     <ReadOnlyTimeline
@@ -727,10 +980,39 @@ export default function SetPageClient({ setId }: { setId: string }) {
                       </Button>
                     </div>
                   </>
-                ) : (
-                  <div className="border-tf bg-white p-4 text-sm text-tf-ink-soft shadow-tf-card">
-                    Breakdown coming soon.
+                ) : transcriptState === "failed" ? (
+                  <div className="border-tf bg-white p-4 shadow-tf-card">
+                    <div className="flex items-start gap-3">
+                      <TriangleAlert
+                        className="mt-0.5 size-5 shrink-0 text-tf-red"
+                        aria-hidden="true"
+                      />
+                      <div>
+                        <h2 className="text-sm font-black uppercase tracking-[0.12em] text-tf-ink">
+                          Breakdown unavailable
+                        </h2>
+                        <p className="mt-2 text-sm leading-6 text-tf-ink-soft">
+                          We couldn&apos;t prepare the transcript for this Set.
+                          Playback is still available above.
+                        </p>
+                        <Button asChild variant="outline" className="mt-4">
+                          <Link href="/library">Back To Library</Link>
+                        </Button>
+                      </div>
+                    </div>
                   </div>
+                ) : transcriptState === "ready" ? (
+                  <div className="border-tf bg-white p-4 shadow-tf-card">
+                    <h2 className="text-sm font-black uppercase tracking-[0.12em] text-tf-ink">
+                      No transcript lines found
+                    </h2>
+                    <p className="mt-2 text-sm leading-6 text-tf-ink-soft">
+                      The transcript finished, but there were no spoken lines in
+                      this Set. Playback is still available above.
+                    </p>
+                  </div>
+                ) : (
+                  <BreakdownTimelineSkeleton />
                 )}
               </div>
 
@@ -744,6 +1026,8 @@ export default function SetPageClient({ setId }: { setId: string }) {
                     ),
                   }}
                   currentTime={currentTime}
+                  transcriptState={transcriptState}
+                  laughState={laughState}
                   onSeek={(time) => {
                     if (!mediaRef.current) {
                       return;
@@ -752,13 +1036,22 @@ export default function SetPageClient({ setId }: { setId: string }) {
                     void mediaRef.current.play().catch(() => null);
                   }}
                 />
+              ) : showBreakdownStatus ? (
+                <BreakdownStatusPanel
+                  className="hidden lg:flex lg:h-full"
+                  transcriptState={transcriptState}
+                  laughState={laughState}
+                />
               ) : (
-                <aside className="border-tf bg-white p-4 shadow-tf-card">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-tf-ink-muted">
+                <aside className="hidden border-tf bg-white p-4 shadow-tf-card lg:block">
+                  <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-tf-ink-muted">
                     Breakdown Status
                   </p>
-                  <p className="mt-3 text-sm text-tf-ink-soft">
-                    Breakdown coming soon.
+                  <p className="mt-2 text-sm font-black uppercase tracking-[0.08em] text-tf-ink">
+                    Processing complete
+                  </p>
+                  <p className="mt-2 text-sm leading-6 text-tf-ink-soft">
+                    No transcript lines were found for this Set.
                   </p>
                 </aside>
               )}

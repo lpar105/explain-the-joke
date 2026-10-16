@@ -4,6 +4,61 @@ import { internal } from "../../convex/_generated/api";
 import { createConvexTest } from "./test.setup";
 
 describe("set ingest attempts", () => {
+  it("publishes a canonical thumbnail on the set as soon as Modal returns it", async () => {
+    const t = createConvexTest();
+
+    const ids = await t.run(async (ctx) => {
+      const setId = await ctx.db.insert("sets", {
+        ownerTokenIdentifier: "clerk:user_123",
+        setStatus: "playable",
+        title: "Thumbnail Test",
+        trimRangeEndSeconds: 60,
+        trimRangeStartSeconds: 5,
+      });
+      const breakdownId = await ctx.db.insert("breakdowns", {
+        editability: "locked",
+        laughSeedingState: "pending",
+        lineSeedingState: "pending",
+        setId,
+      });
+      const ingestJobId = await ctx.db.insert("ingestJobs", {
+        breakdownId,
+        setId,
+        status: "running",
+      });
+
+      return { ingestJobId, setId };
+    });
+
+    const started = await t.mutation(internal.setIngest.beginStepAttempt, {
+      ingestJobId: ids.ingestJobId,
+      runner: "modal",
+      stepName: "prepareRetainedMedia",
+    });
+    const thumbnailStorageKey =
+      "set-ingest/set_123/breakdown_123/prepareRetainedMedia/attempt-1/thumbnail.jpg";
+
+    await t.mutation(internal.setIngest.reportModalStepResult, {
+      artifacts: [
+        {
+          contentType: "image/jpeg",
+          fileName: "thumbnail.jpg",
+          isCanonical: true,
+          key: thumbnailStorageKey,
+          kind: "thumbnail",
+          size: 12_345,
+        },
+      ],
+      attemptNumber: started.attemptNumber,
+      ingestJobId: ids.ingestJobId,
+      outcome: "succeeded",
+      stepName: "prepareRetainedMedia",
+    });
+
+    const set = await t.run((ctx) => ctx.db.get(ids.setId));
+    expect(set?.thumbnailStorageKey).toBe(thumbnailStorageKey);
+  });
+
   it("finalizes a Modal spawn failure instead of leaving the attempt running", async () => {
     const t = createConvexTest();
 

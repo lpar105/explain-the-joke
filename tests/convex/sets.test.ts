@@ -68,6 +68,8 @@ describe("sets", () => {
       title: "Late Show Tape",
       trimRangeEndSeconds: 185,
       trimRangeStartSeconds: 5,
+      thumbnailUrl:
+        "https://image.mux.com/playback_123/thumbnail.jpg?time=6.00&width=640&fit_mode=preserve",
       activePlaybackSource: {
         _id: created.playbackSourceId,
         kind: "temporary",
@@ -80,6 +82,62 @@ describe("sets", () => {
         laughSeedingState: "pending",
         lineSeedingState: "pending",
       },
+    });
+  });
+
+  it("exposes a failed ingest job to the set viewer", async () => {
+    const t = createConvexTest();
+    const asOwner = t.withIdentity({
+      issuer: "https://clerk.dev",
+      subject: "user_123",
+      tokenIdentifier: "clerk:user_123",
+    });
+    const { uploadSessionId } = await asOwner.mutation(
+      api.sets.startUploadSession,
+      {
+        muxUploadId: "upl_failed_ingest",
+        originalFileName: "failed-ingest.mp4",
+      },
+    );
+
+    await t.mutation(internal.sets.markUploadSessionProcessing, {
+      muxAssetId: "asset_failed_ingest",
+      muxUploadId: "upl_failed_ingest",
+    });
+    await t.mutation(internal.sets.markUploadSessionReadyForTrim, {
+      durationSeconds: 90,
+      muxAssetId: "asset_failed_ingest",
+      muxPlaybackId: "playback_failed_ingest",
+      muxUploadId: "upl_failed_ingest",
+    });
+
+    const created = await asOwner.mutation(api.sets.confirmUploadSession, {
+      uploadSessionId,
+      title: "Failed Ingest",
+      trimRangeEndSeconds: 60,
+      trimRangeStartSeconds: 0,
+      durationSeconds: 90,
+      muxAssetId: "asset_failed_ingest",
+      muxPlaybackId: "playback_failed_ingest",
+    });
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch("ingestJobs", created.ingestJobId, {
+        failedAt: Date.now(),
+        status: "failed",
+      });
+    });
+
+    const page = await asOwner.query(api.sets.getSetPageForViewer, {
+      setId: created.setId,
+    });
+
+    expect(page).toMatchObject({
+      breakdown: {
+        laughSeedingState: "pending",
+        lineSeedingState: "pending",
+      },
+      ingestJobStatus: "failed",
     });
   });
 

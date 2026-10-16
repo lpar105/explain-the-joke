@@ -48,6 +48,7 @@ const ingestFailureCodeValidator = v.union(
 const ingestArtifactKindValidator = v.union(
   v.literal("retainedMedia"),
   v.literal("playbackMedia"),
+  v.literal("thumbnail"),
   v.literal("cleanedAudio"),
   v.literal("transcriptRaw"),
   v.literal("laughCandidatesRaw"),
@@ -527,12 +528,26 @@ async function refreshBreakdownEditability(
   });
 }
 
+async function getActiveIngestJob(
+  ctx: MutationCtx,
+  ingestJobId: Id<"ingestJobs">,
+) {
+  const ingestJob = await ctx.db.get(ingestJobId);
+  if (ingestJob === null || (await ctx.db.get(ingestJob.setId)) === null) {
+    return null;
+  }
+  return ingestJob;
+}
+
 export const attachWorkflow = internalMutation({
   args: {
     ingestJobId: v.id("ingestJobs"),
     workflowId: v.string(),
   },
   handler: async (ctx, args) => {
+    if ((await getActiveIngestJob(ctx, args.ingestJobId)) === null) {
+      return null;
+    }
     await ctx.db.patch(args.ingestJobId, {
       workflowId: args.workflowId,
     });
@@ -544,6 +559,9 @@ export const markJobRunning = internalMutation({
     ingestJobId: v.id("ingestJobs"),
   },
   handler: async (ctx, args) => {
+    if ((await getActiveIngestJob(ctx, args.ingestJobId)) === null) {
+      return null;
+    }
     await ctx.db.patch(args.ingestJobId, {
       status: "running",
     });
@@ -555,6 +573,9 @@ export const completeJob = internalMutation({
     ingestJobId: v.id("ingestJobs"),
   },
   handler: async (ctx, args) => {
+    if ((await getActiveIngestJob(ctx, args.ingestJobId)) === null) {
+      return null;
+    }
     await ctx.db.patch(args.ingestJobId, {
       completedAt: Date.now(),
       status: "completed",
@@ -567,6 +588,9 @@ export const failJob = internalMutation({
     ingestJobId: v.id("ingestJobs"),
   },
   handler: async (ctx, args) => {
+    if ((await getActiveIngestJob(ctx, args.ingestJobId)) === null) {
+      return null;
+    }
     await ctx.db.patch(args.ingestJobId, {
       failedAt: Date.now(),
       status: "failed",
@@ -590,7 +614,7 @@ export const setBreakdownPathState = internalMutation({
   },
   handler: async (ctx, args) => {
     const breakdown = await ctx.db.get(args.breakdownId);
-    if (breakdown === null) {
+    if (breakdown === null || (await ctx.db.get(breakdown.setId)) === null) {
       return;
     }
 
@@ -627,6 +651,10 @@ export const beginStepAttempt = internalMutation({
     attemptNumber: v.number(),
   }),
   handler: async (ctx, args) => {
+    if ((await getActiveIngestJob(ctx, args.ingestJobId)) === null) {
+      throw new Error("Set deletion is in progress.");
+    }
+
     const previousAttempts = await ctx.db
       .query("ingestStepAttempts")
       .withIndex("by_ingestJobId_and_stepName", (q) =>
@@ -695,7 +723,7 @@ export const getIngestJobContext = internalQuery({
   }),
   handler: async (ctx, args) => {
     const ingestJob = await ctx.db.get(args.ingestJobId);
-    if (ingestJob === null) {
+    if (ingestJob === null || (await ctx.db.get(ingestJob.setId)) === null) {
       throw new Error("Missing ingest job.");
     }
 
@@ -962,6 +990,10 @@ export const registerArtifactMetadata = internalMutation({
     contentType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    if ((await getActiveIngestJob(ctx, args.ingestJobId)) === null) {
+      return null;
+    }
+
     if (args.isCanonical) {
       const priorCanonical = await ctx.db
         .query("ingestArtifacts")
@@ -1001,6 +1033,11 @@ export const replaceNormalizedLines = internalMutation({
   },
   returns: v.array(v.id("lines")),
   handler: async (ctx, args) => {
+    const breakdown = await ctx.db.get(args.breakdownId);
+    if (breakdown === null || (await ctx.db.get(breakdown.setId)) === null) {
+      return [];
+    }
+
     while (true) {
       const existing = await ctx.db
         .query("lines")
@@ -1045,6 +1082,11 @@ export const replaceNormalizedLaughRegions = internalMutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
+    const breakdown = await ctx.db.get(args.breakdownId);
+    if (breakdown === null || (await ctx.db.get(breakdown.setId)) === null) {
+      return null;
+    }
+
     while (true) {
       const existingLaughs = await ctx.db
         .query("laughRegions")
@@ -1122,6 +1164,11 @@ export const reportModalStepResult = internalMutation({
     stepName: ingestStepNameValidator,
   },
   handler: async (ctx, args) => {
+    const ingestJob = await getActiveIngestJob(ctx, args.ingestJobId);
+    if (ingestJob === null) {
+      return null;
+    }
+
     const attempt = await ctx.db
       .query("ingestStepAttempts")
       .withIndex("by_ingestJobId_and_stepName_and_attemptNumber", (q) =>
@@ -1159,9 +1206,17 @@ export const reportModalStepResult = internalMutation({
       });
     }
 
-    const ingestJob = await ctx.db.get(args.ingestJobId);
-    if (ingestJob === null || !ingestJob.workflowId || !attempt.workflowEventName) {
-      return;
+    const thumbnailArtifact = args.artifacts?.find(
+      (artifact) => artifact.kind === "thumbnail" && artifact.isCanonical,
+    );
+    if (thumbnailArtifact) {
+      await ctx.db.patch(ingestJob.setId, {
+        thumbnailStorageKey: thumbnailArtifact.key,
+      });
+    }
+
+    if (!ingestJob.workflowId || !attempt.workflowEventName) {
+      return null;
     }
 
     await sendEvent(ctx, components.workflow, {
@@ -1173,6 +1228,7 @@ export const reportModalStepResult = internalMutation({
       },
       workflowId: ingestJob.workflowId as WorkflowId,
     });
+    return null;
   },
 });
 
@@ -1370,6 +1426,7 @@ async function runModalStepWithRetries(args: {
     kind:
       | "retainedMedia"
       | "playbackMedia"
+      | "thumbnail"
       | "cleanedAudio"
       | "transcriptRaw"
       | "laughCandidatesRaw";
@@ -1669,6 +1726,11 @@ export const runSetIngest = workflow
             contentType: "video/mp4",
             fileName: "playback.mp4",
             kind: "playbackMedia",
+          },
+          {
+            contentType: "image/jpeg",
+            fileName: "thumbnail.jpg",
+            kind: "thumbnail",
           },
         ],
         step,

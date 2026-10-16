@@ -20,6 +20,10 @@ _Avoid_: Sentence, utterance
 A timed audience-laughter event owned by the line during which the laugh begins.
 _Avoid_: Reaction, laugh marker, applause block
 
+**Calibration Sample**:
+A user-selected continuous minute within a set's retained media, or the entire retained set when shorter, with every audience-laughter interval manually marked and the remaining time identified as non-laughter, used to calibrate laughter detection for that set. A usable sample contains both laughter and non-laughter; laughter crossing its boundaries is marked only within the sample.
+_Avoid_: Training set, room profile
+
 **Share Link**:
 An access grant that exposes a read-only review surface for a set and its current breakdown, either to any signed-in user with the link or to specific usernames.
 _Avoid_: Public page, export

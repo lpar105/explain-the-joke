@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { isAllowedDevEmail } from "../lib/dev-access";
 import { toConvexError } from "../lib/errors";
 import { composeTranscriptText } from "../lib/setAnalysis";
+import { getBunnyArtifactCdnUrl } from "./bunny";
 import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -103,6 +104,11 @@ export const activateBunnyPlaybackSourceInternal = internalMutation({
     setId: v.id("sets"),
   },
   handler: async (ctx, args) => {
+    const set = await ctx.db.get(args.setId);
+    if (set === null) {
+      return null;
+    }
+
     const activeSources = await ctx.db
       .query("playbackSources")
       .withIndex("by_setId_and_isActive", (q) =>
@@ -194,6 +200,17 @@ export const listForViewer = query({
           title: set.title,
           trimRangeEndSeconds: set.trimRangeEndSeconds,
           trimRangeStartSeconds: set.trimRangeStartSeconds,
+          thumbnailUrl: set.thumbnailStorageKey
+            ? getBunnyArtifactCdnUrl(set.thumbnailStorageKey)
+            : activePlaybackSource?.provider === "mux"
+              ? `https://image.mux.com/${encodeURIComponent(activePlaybackSource.playbackId)}/thumbnail.jpg?time=${(
+                  set.trimRangeStartSeconds +
+                  Math.min(
+                    1,
+                    (set.trimRangeEndSeconds - set.trimRangeStartSeconds) / 2,
+                  )
+                ).toFixed(2)}&width=640&fit_mode=preserve`
+              : null,
           activePlaybackSource: activePlaybackSource
             ? {
                 _id: activePlaybackSource._id,
@@ -518,6 +535,18 @@ export const getSetPageForViewer = query({
     const activePlaybackSource = await getActivePlaybackSource(ctx, set._id);
     const currentBreakdown =
       breakdown !== null && breakdown?.setId === set._id ? breakdown : null;
+    const ingestJob =
+      currentBreakdown === null
+        ? null
+        : ((
+            await ctx.db
+              .query("ingestJobs")
+              .withIndex("by_breakdownId", (q) =>
+                q.eq("breakdownId", currentBreakdown._id),
+              )
+              .order("desc")
+              .take(1)
+          )[0] ?? null);
 
     let analysisData = null;
     if (currentBreakdown !== null) {
@@ -633,6 +662,7 @@ export const getSetPageForViewer = query({
               lineFailureCode: currentBreakdown.lineFailureCode ?? null,
               laughFailureCode: currentBreakdown.laughFailureCode ?? null,
             },
+      ingestJobStatus: ingestJob?.status ?? null,
       analysisData,
     };
   },

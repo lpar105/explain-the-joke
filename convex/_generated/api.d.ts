@@ -12,6 +12,8 @@ import type * as auth from "../auth.js";
 import type * as bunny from "../bunny.js";
 import type * as bunnyStream from "../bunnyStream.js";
 import type * as http from "../http.js";
+import type * as setDeletion from "../setDeletion.js";
+import type * as setDeletionNode from "../setDeletionNode.js";
 import type * as setIngest from "../setIngest.js";
 import type * as setIngestModal from "../setIngestModal.js";
 import type * as sets from "../sets.js";
@@ -28,6 +30,8 @@ declare const fullApi: ApiFromModules<{
   bunny: typeof bunny;
   bunnyStream: typeof bunnyStream;
   http: typeof http;
+  setDeletion: typeof setDeletion;
+  setDeletionNode: typeof setDeletionNode;
   setIngest: typeof setIngest;
   setIngestModal: typeof setIngestModal;
   sets: typeof sets;

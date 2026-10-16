@@ -62,6 +62,7 @@ const ingestStepRunnerValidator = v.union(
 const ingestArtifactKindValidator = v.union(
   v.literal("retainedMedia"),
   v.literal("playbackMedia"),
+  v.literal("thumbnail"),
   v.literal("cleanedAudio"),
   v.literal("transcriptRaw"),
   v.literal("laughCandidatesRaw"),
@@ -112,6 +113,12 @@ const playbackSourceKindValidator = v.union(
 
 const playbackModeValidator = v.union(v.literal("direct"), v.literal("hls"));
 
+const setDeletionStatusValidator = v.union(
+  v.literal("cancelingWork"),
+  v.literal("deletingData"),
+  v.literal("verifyingCleanup"),
+);
+
 export default defineSchema({
   sets: defineTable({
     ownerTokenIdentifier: v.string(),
@@ -120,6 +127,7 @@ export default defineSchema({
     trimRangeEndSeconds: v.number(),
     setStatus: setStatusValidator,
     currentBreakdownId: v.optional(v.id("breakdowns")),
+    thumbnailStorageKey: v.optional(v.string()),
   }).index("by_ownerTokenIdentifier", ["ownerTokenIdentifier"]),
   breakdowns: defineTable({
     setId: v.id("sets"),
@@ -216,7 +224,8 @@ export default defineSchema({
   })
     .index("by_ownerTokenIdentifier", ["ownerTokenIdentifier"])
     .index("by_muxUploadId", ["muxUploadId"])
-    .index("by_muxAssetId", ["muxAssetId"]),
+    .index("by_muxAssetId", ["muxAssetId"])
+    .index("by_confirmedSetId", ["confirmedSetId"]),
   playbackSources: defineTable({
     setId: v.id("sets"),
     provider: playbackSourceProviderValidator,
@@ -227,4 +236,11 @@ export default defineSchema({
     providerAssetId: v.string(),
     providerUploadId: v.optional(v.string()),
   }).index("by_setId_and_isActive", ["setId", "isActive"]),
+  setDeletionJobs: defineTable({
+    setId: v.id("sets"),
+    status: setDeletionStatusValidator,
+    retryCount: v.number(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_setId", ["setId"]),
 });

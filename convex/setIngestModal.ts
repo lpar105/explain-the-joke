@@ -22,6 +22,7 @@ const inputArtifactValidator = v.object({
   kind: v.union(
     v.literal("retainedMedia"),
     v.literal("playbackMedia"),
+    v.literal("thumbnail"),
     v.literal("transcriptRaw"),
     v.literal("cleanedAudio"),
     v.literal("laughCandidatesRaw"),
@@ -37,6 +38,7 @@ const outputArtifactValidator = v.object({
   kind: v.union(
     v.literal("retainedMedia"),
     v.literal("playbackMedia"),
+    v.literal("thumbnail"),
     v.literal("cleanedAudio"),
     v.literal("transcriptRaw"),
     v.literal("laughCandidatesRaw"),

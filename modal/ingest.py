@@ -47,6 +47,7 @@ class Artifact:
     kind: Literal[
         "retainedMedia",
         "playbackMedia",
+        "thumbnail",
         "cleanedAudio",
         "transcriptRaw",
         "laughCandidatesRaw",
@@ -220,6 +221,7 @@ def _expect_output_artifact(
     kind: Literal[
         "retainedMedia",
         "playbackMedia",
+        "thumbnail",
         "cleanedAudio",
         "transcriptRaw",
         "laughCandidatesRaw",
@@ -294,11 +296,13 @@ def _prepare_retained_media_impl(payload: WorkerPayload) -> list[Artifact]:
 
     retained_artifact = _expect_output_artifact(payload, "retainedMedia")
     playback_artifact = _expect_output_artifact(payload, "playbackMedia")
+    thumbnail_artifact = _expect_output_artifact(payload, "thumbnail")
 
     with tempfile.TemporaryDirectory(prefix="tight-five-modal-") as temp_dir:
         temp_path = Path(temp_dir)
         retained_path = temp_path / retained_artifact.fileName
         playback_path = temp_path / playback_artifact.fileName
+        thumbnail_path = temp_path / thumbnail_artifact.fileName
 
         source = payload.trimSource
         input_args = [
@@ -349,9 +353,27 @@ def _prepare_retained_media_impl(payload: WorkerPayload) -> list[Artifact]:
             ],
         )
 
+        thumbnail_offset_seconds = min(
+            1.0,
+            (source.trimRangeEndSeconds - source.trimRangeStartSeconds) / 2,
+        )
+        _run_ffmpeg(
+            [
+                *input_args,
+                "-ss",
+                f"{source.trimRangeStartSeconds + thumbnail_offset_seconds:.3f}",
+                "-frames:v",
+                "1",
+                "-q:v",
+                "2",
+                str(thumbnail_path),
+            ],
+        )
+
         return [
             _upload_to_bunny(retained_path, retained_artifact),
             _upload_to_bunny(playback_path, playback_artifact),
+            _upload_to_bunny(thumbnail_path, thumbnail_artifact),
         ]
 
 

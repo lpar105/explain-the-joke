@@ -2,6 +2,8 @@
 
 How the engineering skills should consume this repo's domain documentation when exploring the codebase.
 
+Upstream skills now use the names `GLOSSARY.md` and `GLOSSARY-MAP.md`. This repo retains `CONTEXT.md` and `CONTEXT-MAP.md`: interpret the upstream names as these existing files when reading or writing domain docs. `/domain-modeling` now owns the glossary and ADR workflow, also invoked by `/grill-with-docs`.
+
 ## Before exploring, read these
 
 - **`CONTEXT.md`** at the repo root, or
