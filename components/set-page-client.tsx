@@ -3,7 +3,7 @@
 import Hls from "hls.js";
 import { useMemo, useRef, useState, useEffect } from "react";
 import { Check, LoaderCircle, Pause, Play, TriangleAlert } from "lucide-react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import Link from "next/link";
 
 import { api } from "../convex/_generated/api";
@@ -678,6 +678,9 @@ export default function SetPageClient({ setId }: { setId: string }) {
   const set = useQuery(api.sets.getSetPageForViewer, {
     setId: setId as Id<"sets">,
   });
+  const retryCalibration = useMutation(api.calibration.retry);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const mediaRef = useRef<HTMLVideoElement | null>(null);
   const [mediaElement, setMediaElement] = useState<HTMLVideoElement | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
@@ -906,6 +909,13 @@ export default function SetPageClient({ setId }: { setId: string }) {
                   )}
                 </div>
 
+                {set.calibrationRetryable && <div className="border-2 border-tf-ink bg-tf-paper p-3 text-sm">
+                  <button disabled={retrying} className="font-bold underline" onClick={() => {
+                    setRetrying(true); setRetryError(null);
+                    void retryCalibration({ setId: set._id }).catch(() => setRetryError("Processing could not restart. Try again.")).finally(() => setRetrying(false));
+                  }}>{retrying ? "Restarting…" : "Retry calibration processing"}</button>
+                  {retryError && <p role="alert">{retryError}</p>}
+                </div>}
                 {showBreakdownStatus ? (
                   <div className="lg:hidden">
                     {analysisData ? (

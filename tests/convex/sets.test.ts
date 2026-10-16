@@ -114,7 +114,7 @@ describe("sets", () => {
     const created = await asOwner.mutation(api.sets.confirmUploadSession, {
       uploadSessionId,
       title: "Failed Ingest",
-      trimRangeEndSeconds: 60,
+      trimRangeEndSeconds: 90,
       trimRangeStartSeconds: 0,
       durationSeconds: 90,
       muxAssetId: "asset_failed_ingest",
@@ -299,20 +299,14 @@ describe("sets", () => {
       muxPlaybackId: "playback_single_use",
     });
 
-    await expectMutationToFailWithCode(
-      asOwner.mutation(api.sets.confirmUploadSession, {
-        uploadSessionId,
-        title: "Duplicate",
-        trimRangeEndSeconds: 60,
-        trimRangeStartSeconds: 0,
-        durationSeconds: 75,
-        muxAssetId: "asset_single_use",
-        muxPlaybackId: "playback_single_use",
-      }),
-      "validation",
-    );
-
-    expect(await asOwner.query(api.sets.listForViewer)).toHaveLength(1);
+    const retried = await asOwner.mutation(api.sets.confirmUploadSession, {
+      uploadSessionId, title: "Duplicate", trimRangeEndSeconds: 60,
+      trimRangeStartSeconds: 0, durationSeconds: 75,
+      muxAssetId: "asset_single_use", muxPlaybackId: "playback_single_use",
+    });
+    expect(await asOwner.query(api.sets.listForViewer)).toHaveLength(0);
+    expect(await t.run(ctx => ctx.db.query("sets").collect())).toHaveLength(1);
+    expect(retried.setId).toBeDefined();
   });
 
   it("does not allow confirmation before the upload session is ready for trim", async () => {
@@ -879,7 +873,7 @@ describe("sets", () => {
     const created = await asOwner.mutation(api.sets.confirmUploadSession, {
       uploadSessionId,
       title: "Unlock Me",
-      trimRangeEndSeconds: 60,
+      trimRangeEndSeconds: 90,
       trimRangeStartSeconds: 0,
       durationSeconds: 90,
       muxAssetId: "asset_unlock",

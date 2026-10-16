@@ -50,6 +50,7 @@ const ingestArtifactKindValidator = v.union(
   v.literal("playbackMedia"),
   v.literal("thumbnail"),
   v.literal("cleanedAudio"),
+  v.literal("scoreTrack"),
   v.literal("transcriptRaw"),
   v.literal("laughCandidatesRaw"),
   v.literal("linesNormalized"),
@@ -404,8 +405,7 @@ function normalizeTranscriptSentences(args: {
 
   return rawLines.map((line, index) => {
     const nextLine = rawLines[index + 1] ?? null;
-    const startSeconds =
-      index === 0 ? 0 : roundToMillis(rawLines[index - 1].endSeconds);
+    const startSeconds = index === 0 ? 0 : roundToMillis(line.startSeconds);
     const endSeconds = roundToMillis(
       nextLine?.startSeconds ?? Math.max(normalizedTotalDuration, line.endSeconds),
     );
@@ -719,6 +719,7 @@ export const getIngestJobContext = internalQuery({
   returns: v.object({
     breakdownId: v.id("breakdowns"),
     setId: v.id("sets"),
+    calibrationRequired: v.optional(v.boolean()),
     workflowId: v.optional(v.string()),
   }),
   handler: async (ctx, args) => {
@@ -730,6 +731,7 @@ export const getIngestJobContext = internalQuery({
     return {
       breakdownId: ingestJob.breakdownId,
       setId: ingestJob.setId,
+      calibrationRequired: ingestJob.calibrationRequired,
       workflowId: ingestJob.workflowId,
     };
   },
@@ -991,9 +993,16 @@ export const registerArtifactMetadata = internalMutation({
   },
   handler: async (ctx, args) => {
     if ((await getActiveIngestJob(ctx, args.ingestJobId)) === null) {
+      await ctx.scheduler.runAfter(0, internal.setDeletion.cleanupLateArtifacts, { keys: [args.key] });
       return null;
     }
 
+    const job = await ctx.db.get(args.ingestJobId);
+    if (job?.calibrationInputId && args.kind === "retainedMedia") {
+      const existing = await ctx.db.query("ingestArtifacts")
+        .withIndex("by_ingestJobId_and_kind", q => q.eq("ingestJobId", args.ingestJobId).eq("kind", args.kind)).take(20);
+      if (existing.some(a => a.isCanonical && a.path !== args.key)) throw new Error("Calibration media is immutable.");
+    }
     if (args.isCanonical) {
       const priorCanonical = await ctx.db
         .query("ingestArtifacts")
@@ -1038,6 +1047,7 @@ export const replaceNormalizedLines = internalMutation({
       return [];
     }
 
+    if (breakdown.editability === "editable" || breakdown.lineSeededAt) return [];
     while (true) {
       const existing = await ctx.db
         .query("lines")
@@ -1087,6 +1097,7 @@ export const replaceNormalizedLaughRegions = internalMutation({
       return null;
     }
 
+    if (breakdown.editability === "editable" || breakdown.laughSeededAt) return null;
     while (true) {
       const existingLaughs = await ctx.db
         .query("laughRegions")
@@ -1166,6 +1177,7 @@ export const reportModalStepResult = internalMutation({
   handler: async (ctx, args) => {
     const ingestJob = await getActiveIngestJob(ctx, args.ingestJobId);
     if (ingestJob === null) {
+      if (args.artifacts?.length) await ctx.scheduler.runAfter(0, internal.setDeletion.cleanupLateArtifacts, { keys: args.artifacts.map(a => a.key) });
       return null;
     }
 
@@ -1182,6 +1194,12 @@ export const reportModalStepResult = internalMutation({
     if (attempt === null) {
       throw new Error("Missing ingest step attempt.");
     }
+
+    if (attempt.status !== "running") return null;
+    const latest = await ctx.db.query("ingestStepAttempts")
+      .withIndex("by_ingestJobId_and_stepName", q => q.eq("ingestJobId", args.ingestJobId).eq("stepName", args.stepName))
+      .order("desc").first();
+    if (latest?._id !== attempt._id) return null;
 
     await ctx.db.patch(attempt._id, {
       failureCode: args.failureCode,
@@ -1287,7 +1305,7 @@ export const normalizeLines = internalAction({
 
     const normalizedLines = normalizeTranscriptSentences({
       payload: transcriptPayload,
-      totalDurationHint: laughPayload?.total_duration,
+      totalDurationHint: laughPayload?.total_duration ?? (await ctx.runQuery(internal.calibration.retainedDuration, { ingestJobId: args.ingestJobId }) ?? undefined),
     });
 
     await ctx.runMutation(internal.setIngest.replaceNormalizedLines, {
@@ -1417,7 +1435,8 @@ async function runModalStepWithRetries(args: {
   breakdownId: Id<"breakdowns">;
   ingestJobId: Id<"ingestJobs">;
   inputArtifacts: Array<
-    "retainedMedia" | "transcriptRaw" | "cleanedAudio" | "laughCandidatesRaw"
+    "retainedMedia" | "transcriptRaw" | "scoreTrack"
+      | "cleanedAudio" | "laughCandidatesRaw"
   >;
   maxAttempts: number;
   outputArtifacts?: Array<{
@@ -1427,6 +1446,7 @@ async function runModalStepWithRetries(args: {
       | "retainedMedia"
       | "playbackMedia"
       | "thumbnail"
+      | "scoreTrack"
       | "cleanedAudio"
       | "transcriptRaw"
       | "laughCandidatesRaw";
@@ -1454,6 +1474,12 @@ async function runModalStepWithRetries(args: {
     trimSource,
   } =
     args;
+
+  const reusableJob = await step.runQuery(internal.setIngest.getIngestJobContext, { ingestJobId });
+  if (reusableJob.calibrationRequired && outputArtifacts?.length) {
+    const existing = await Promise.all(outputArtifacts.map(output => step.runQuery(internal.setIngest.getCanonicalArtifact, { ingestJobId, kind: output.kind })));
+    if (existing.every(Boolean)) return;
+  }
 
   for (let index = 0; index < maxAttempts; index += 1) {
     const attemptState = index === 0 ? "running" : "retrying";
@@ -1483,7 +1509,8 @@ async function runModalStepWithRetries(args: {
       fileName: string;
       isCanonical: boolean;
       key: string;
-      kind: "retainedMedia" | "transcriptRaw" | "cleanedAudio" | "laughCandidatesRaw";
+      kind: "retainedMedia" | "transcriptRaw" | "scoreTrack"
+      | "cleanedAudio" | "laughCandidatesRaw";
       size?: number;
     }> = [];
     for (const kind of inputArtifacts) {
@@ -1566,6 +1593,8 @@ async function runLineBranch(args: {
   ingestJobId: Id<"ingestJobs">;
   step: WorkflowCtx;
 }) {
+  const existingBreakdown = await args.step.runQuery(internal.sets.getBreakdownInternal, { breakdownId: args.breakdownId });
+  if (existingBreakdown?.lineSeedingState === "ready") return;
   await runModalStepWithRetries({
     breakdownId: args.breakdownId,
     ingestJobId: args.ingestJobId,
@@ -1600,6 +1629,7 @@ async function runLaughBranch(args: {
   breakdownId: Id<"breakdowns">;
   ingestJobId: Id<"ingestJobs">;
   linesReady: Promise<void>;
+  manualOnly?: boolean;
   step: WorkflowCtx;
 }) {
   try {
@@ -1614,11 +1644,21 @@ async function runLaughBranch(args: {
           fileName: "cleaned-audio.wav",
           kind: "cleanedAudio",
         },
+        ...(args.manualOnly ? [{ contentType: "application/json", fileName: "score-track.json", kind: "scoreTrack" as const }] : []),
       ],
       path: "laugh",
       step: args.step,
       stepName: "preprocessLaughAudio",
     });
+
+    if (args.manualOnly) {
+      const committed = await args.step.runQuery(internal.calibration.getInput, { ingestJobId: args.ingestJobId });
+      if (!committed?.inputId) await args.step.awaitEvent({ name: "calibration-confirmed", validator: v.null() });
+      await args.linesReady;
+      await args.step.runAction(internal.calibration.publishManual, { ingestJobId: args.ingestJobId },
+        { retry: { maxAttempts: 3, initialBackoffMs: 1000, base: 2 } });
+      return;
+    }
 
     await runModalStepWithRetries({
       breakdownId: args.breakdownId,
@@ -1654,6 +1694,7 @@ async function runLaughBranch(args: {
       state: "ready",
     });
   } catch (error) {
+    if (args.manualOnly) await args.step.runMutation(internal.calibration.recordFailure, { ingestJobId: args.ingestJobId });
     await args.step.runMutation(internal.setIngest.setBreakdownPathState, {
       breakdownId: args.breakdownId,
       failureCode: "laugh_normalization_failed",
@@ -1703,14 +1744,10 @@ export const runSetIngest = workflow
       ingestJobId: args.ingestJobId,
     });
 
-    const trimSource = await step.runQuery(
-      internal.setIngest.getRetainedMediaSourceContext,
-      {
-        ingestJobId: args.ingestJobId,
-      },
-    );
-
     try {
+      const retained = context.calibrationRequired ? await step.runQuery(internal.setIngest.getCanonicalArtifact, { ingestJobId: args.ingestJobId, kind: "retainedMedia" }) : null;
+      if (!retained) {
+      const trimSource = await step.runQuery(internal.setIngest.getRetainedMediaSourceContext, { ingestJobId: args.ingestJobId });
       await runModalStepWithRetries({
         breakdownId: context.breakdownId,
         ingestJobId: args.ingestJobId,
@@ -1743,6 +1780,7 @@ export const runSetIngest = workflow
           trimRangeStartSeconds: trimSource.trimRangeStartSeconds,
         },
       });
+      }
     } catch (error) {
       console.error("Prepare retained media failed.", {
         error,
@@ -1772,6 +1810,7 @@ export const runSetIngest = workflow
           breakdownId: context.breakdownId,
           ingestJobId: args.ingestJobId,
           linesReady,
+          manualOnly: context.calibrationRequired,
           step,
         }),
       ]);
@@ -1793,7 +1832,7 @@ export const runSetIngest = workflow
       breakdownId: context.breakdownId,
     });
 
-    if (finalBreakdown?.lineSeedingState === "failed") {
+    if (finalBreakdown?.lineSeedingState === "failed" || (context.calibrationRequired && finalBreakdown?.laughSeedingState === "failed")) {
       await step.runMutation(internal.setIngest.failJob, {
         ingestJobId: args.ingestJobId,
       });

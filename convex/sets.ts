@@ -1,3 +1,4 @@
+import { abandonUpload, CONTACT_TIMEOUT_MS } from "./uploadLifecycle";
 import { v } from "convex/values";
 
 import { isAllowedDevEmail } from "../lib/dev-access";
@@ -184,7 +185,7 @@ export const listForViewer = query({
       .take(50);
 
     return Promise.all(
-      sets.map(async (set) => {
+      sets.filter(set => !set.provisional).map(async (set) => {
         const breakdown = set.currentBreakdownId
           ? await ctx.db.get(set.currentBreakdownId)
           : null;
@@ -245,7 +246,7 @@ export const getForViewer = query({
     }
 
     const set = await ctx.db.get(args.setId);
-    if (set === null || set.ownerTokenIdentifier !== identity.tokenIdentifier) {
+    if (set === null || set.provisional || set.ownerTokenIdentifier !== identity.tokenIdentifier) {
       return null;
     }
 
@@ -524,7 +525,7 @@ export const getSetPageForViewer = query({
     const tokenIdentifier = identity.tokenIdentifier;
     const set = await ctx.db.get(args.setId);
 
-    if (set === null || set.ownerTokenIdentifier !== tokenIdentifier) {
+    if (set === null || set.provisional || set.ownerTokenIdentifier !== tokenIdentifier) {
       return null;
     }
 
@@ -663,6 +664,7 @@ export const getSetPageForViewer = query({
               laughFailureCode: currentBreakdown.laughFailureCode ?? null,
             },
       ingestJobStatus: ingestJob?.status ?? null,
+      calibrationRetryable: Boolean(ingestJob?.calibrationRequired && ingestJob.calibrationInputId && ingestJob.status === "failed" && !currentBreakdown?.laughSeededAt),
       analysisData,
     };
   },
@@ -681,7 +683,9 @@ export const startUploadSession = mutation({
       muxUploadId: args.muxUploadId,
       originalFileName: args.originalFileName.trim(),
       status: "waitingForUpload",
+      lastContactAt: Date.now(),
     });
+    await ctx.scheduler.runAfter(300_000, internal.uploadLifecycle.expire, { uploadSessionId });
 
     return { uploadSessionId };
   },
@@ -702,15 +706,7 @@ export const discardUploadSession = mutation({
       throw toConvexError("not_found");
     }
 
-    if (uploadSession.status === "confirmed") {
-      return null;
-    }
-
-    if (uploadSession.status !== "discarded") {
-      await ctx.db.patch("uploadSessions", args.uploadSessionId, {
-        status: "discarded",
-      });
-    }
+    await abandonUpload(ctx, uploadSession);
 
     return null;
   },
@@ -741,13 +737,18 @@ export const confirmUploadSession = mutation({
       throw toConvexError("not_found");
     }
 
-    if (uploadSession.status === "confirmed") {
-      throw toConvexError("validation");
+    if ((uploadSession.status === "calibrating" || uploadSession.status === "confirmed") && uploadSession.confirmedSetId) {
+      const set = await ctx.db.get(uploadSession.confirmedSetId);
+      const job = await ctx.db.query("ingestJobs").withIndex("by_setId", q => q.eq("setId", uploadSession.confirmedSetId!)).unique();
+      const source = await getActivePlaybackSource(ctx, uploadSession.confirmedSetId);
+      if (set?.currentBreakdownId && job && source) return { setId: set._id, breakdownId: set.currentBreakdownId, ingestJobId: job._id, playbackSourceId: source._id };
+      throw toConvexError("not_found");
     }
 
     if (uploadSession.status !== "readyForTrim") {
       throw toConvexError("processing_unavailable");
     }
+    if (Date.now() - (uploadSession.lastContactAt ?? uploadSession._creationTime) >= CONTACT_TIMEOUT_MS) throw toConvexError("not_found");
 
     const nextTitle = normalizeTitle(args.title);
     if (!nextTitle) {
@@ -772,7 +773,9 @@ export const confirmUploadSession = mutation({
       throw toConvexError("processing_unavailable");
     }
 
+    const calibrationRequired = args.trimRangeEndSeconds - args.trimRangeStartSeconds <= 60;
     const setId = await ctx.db.insert("sets", {
+      provisional: calibrationRequired,
       ownerTokenIdentifier: tokenIdentifier,
       title: nextTitle,
       trimRangeStartSeconds: args.trimRangeStartSeconds,
@@ -792,6 +795,8 @@ export const confirmUploadSession = mutation({
     });
 
     const ingestJobId = await ctx.db.insert("ingestJobs", {
+      calibrationRequired,
+      ...(calibrationRequired ? { calibrationStatus: "pending" as const } : {}),
       breakdownId,
       setId,
       status: "pending",
@@ -811,7 +816,8 @@ export const confirmUploadSession = mutation({
       muxAssetId: args.muxAssetId.trim(),
       muxPlaybackId: args.muxPlaybackId.trim(),
       durationSeconds: args.durationSeconds,
-      status: "confirmed",
+      status: calibrationRequired ? "calibrating" : "confirmed",
+      lastContactAt: Date.now(),
       failureCode: undefined,
       confirmedSetId: setId,
     });
@@ -957,6 +963,7 @@ export const markUploadSessionReadyForTrim = internalMutation({
 
     if (
       uploadSession === null ||
+      uploadSession.status === "calibrating" ||
       uploadSession.status === "discarded" ||
       uploadSession.status === "confirmed"
     ) {
@@ -1003,6 +1010,7 @@ export const markUploadSessionFailed = internalMutation({
 
     if (
       uploadSession === null ||
+      uploadSession.status === "calibrating" ||
       uploadSession.status === "discarded" ||
       uploadSession.status === "confirmed"
     ) {
@@ -1032,7 +1040,7 @@ export const rename = mutation({
     }
 
     const set = await ctx.db.get(args.setId);
-    if (set === null || set.ownerTokenIdentifier !== identity.tokenIdentifier) {
+    if (set === null || set.provisional || set.ownerTokenIdentifier !== identity.tokenIdentifier) {
       throw toConvexError("not_found");
     }
 

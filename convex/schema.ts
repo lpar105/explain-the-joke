@@ -64,6 +64,7 @@ const ingestArtifactKindValidator = v.union(
   v.literal("playbackMedia"),
   v.literal("thumbnail"),
   v.literal("cleanedAudio"),
+  v.literal("scoreTrack"),
   v.literal("transcriptRaw"),
   v.literal("laughCandidatesRaw"),
   v.literal("linesNormalized"),
@@ -96,6 +97,7 @@ const uploadSessionStatusValidator = v.union(
   v.literal("waitingForUpload"),
   v.literal("processing"),
   v.literal("readyForTrim"),
+  v.literal("calibrating"),
   v.literal("failed"),
   v.literal("discarded"),
   v.literal("confirmed"),
@@ -127,6 +129,7 @@ export default defineSchema({
     trimRangeEndSeconds: v.number(),
     setStatus: setStatusValidator,
     currentBreakdownId: v.optional(v.id("breakdowns")),
+    provisional: v.optional(v.boolean()),
     thumbnailStorageKey: v.optional(v.string()),
   }).index("by_ownerTokenIdentifier", ["ownerTokenIdentifier"]),
   breakdowns: defineTable({
@@ -168,6 +171,13 @@ export default defineSchema({
   ingestJobs: defineTable({
     setId: v.id("sets"),
     breakdownId: v.id("breakdowns"),
+    calibrationRequired: v.optional(v.boolean()),
+    calibrationInputId: v.optional(v.id("_storage")),
+    calibrationInputHash: v.optional(v.string()),
+    calibrationResultId: v.optional(v.id("_storage")),
+    calibrationStatus: v.optional(v.union(v.literal("pending"), v.literal("running"), v.literal("succeeded"), v.literal("failed"))),
+    calibrationErrorCode: v.optional(v.string()),
+    calibrationRetryable: v.optional(v.boolean()),
     workflowId: v.optional(v.string()),
     status: ingestJobStatusValidator,
     activePlaybackMigrationStep: v.optional(ingestStepNameValidator),
@@ -220,6 +230,7 @@ export default defineSchema({
     originalFileName: v.string(),
     status: uploadSessionStatusValidator,
     failureCode: v.optional(appErrorCodeValidator),
+    lastContactAt: v.optional(v.number()),
     confirmedSetId: v.optional(v.id("sets")),
   })
     .index("by_ownerTokenIdentifier", ["ownerTokenIdentifier"])

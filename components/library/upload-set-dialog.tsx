@@ -16,7 +16,7 @@ import {
   LoaderCircle,
   Upload,
 } from "lucide-react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 
 import { api } from "../../convex/_generated/api";
 import {
@@ -28,6 +28,8 @@ import {
 } from "../../lib/errors";
 import { getClipDurationSeconds, getClipRelativeTime } from "../../lib/trim-range";
 import { formatTimestamp } from "../../lib/set-status";
+import CalibrationDialog from "./calibration-dialog";
+import type { ManualInterval } from "../../lib/calibration";
 import DirectUploadField from "./direct-upload-field";
 import { Button } from "../ui/button";
 import {
@@ -41,7 +43,7 @@ import {
 } from "../ui/dialog";
 import { Input } from "../ui/input";
 
-type UploadStep = "details" | "uploading" | "processing" | "trimming";
+type UploadStep = "details" | "uploading" | "processing" | "trimming" | "calibrating";
 
 type DirectUploadResponse = {
   uploadId: string;
@@ -74,6 +76,10 @@ function getDefaultSetTitleFromFileName(fileName: string) {
 export default function UploadSetDialog() {
   const router = useRouter();
   const startUploadSession = useMutation(api.sets.startUploadSession);
+  const confirmCalibration = useAction(api.calibration.confirm);
+  const contact = useMutation(api.uploadLifecycle.contact);
+  const discardSession = useMutation(api.sets.discardUploadSession);
+  const [localSource, setLocalSource] = useState("");
   const confirmUploadSession = useMutation(api.sets.confirmUploadSession);
 
   const [open, setOpen] = useState(false);
@@ -94,6 +100,8 @@ export default function UploadSetDialog() {
   const [isConfirming, setIsConfirming] = useState(false);
   const [startUploadNonce, setStartUploadNonce] = useState(0);
   const [uploaderKey, setUploaderKey] = useState(0);
+  const savingRef = useRef(false);
+  useEffect(() => { savingRef.current = isConfirming || isCleaningUp; }, [isConfirming, isCleaningUp]);
   const uploadSession = useQuery(
     api.sets.getUploadSessionForViewer,
     uploadSessionId ? { uploadSessionId } : "skip",
@@ -167,10 +175,54 @@ export default function UploadSetDialog() {
     }
   }, [uploadSession]);
 
+  useEffect(() => () => { if (localSource) URL.revokeObjectURL(localSource); }, [localSource]);
+
+  useEffect(() => {
+    if (!open || !uploadSessionId) return;
+    const heartbeat = () => { void contact({ uploadSessionId }).then(alive => {
+      if (!alive) setErrorMessage("This unfinished upload expired. Close it and start again.");
+    }).catch(() => {}); };
+    heartbeat();
+    const timer = window.setInterval(heartbeat, 30_000);
+    return () => window.clearInterval(timer);
+  }, [open, uploadSessionId, contact]);
+
+  useEffect(() => {
+    if (step !== "calibrating") return;
+    const unload = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = ""; };
+    const navigate = (event: MouseEvent) => {
+      const link = (event.target as HTMLElement).closest('a[href]');
+      if (!link || event.defaultPrevented) return;
+      event.preventDefault(); event.stopPropagation();
+      if (!isConfirming && window.confirm("Discard upload?")) {
+        void cleanupTemporaryUploadAndClose().then(() => router.push(link.getAttribute('href')!));
+      }
+    };
+    window.addEventListener('beforeunload', unload);
+    document.addEventListener('click', navigate, true);
+    return () => { window.removeEventListener('beforeunload', unload); document.removeEventListener('click', navigate, true); };
+  });
+
+  useEffect(() => {
+    if (step !== "calibrating") return;
+    const guard = () => window.history.pushState({ ...window.history.state, calibrationGuard: true }, "", window.location.href);
+    guard();
+    const back = () => {
+      if (savingRef.current) { guard(); return; }
+      if (!window.confirm("Discard upload?")) { guard(); return; }
+      void cleanupTemporaryUploadAndClose().then(() => router.back());
+    };
+    window.addEventListener('popstate', back);
+    return () => window.removeEventListener('popstate', back);
+    // The guard lasts for this modal session; changing annotations must not add history entries.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
   function resetFlow() {
     setStep("details");
     setTitle("");
     setSelectedFile(null);
+    setLocalSource("");
     setUploadSessionId(null);
     setUploadId(null);
     setAssetId(null);
@@ -197,7 +249,9 @@ export default function UploadSetDialog() {
     setErrorMessage(null);
 
     try {
-      if (uploadId !== null) {
+      if (uploadSessionId !== null) {
+        await discardSession({ uploadSessionId });
+      } else if (uploadId !== null) {
         const response = await fetch(`/api/mux/direct-uploads/${uploadId}`, {
           method: "DELETE",
         });
@@ -313,9 +367,12 @@ export default function UploadSetDialog() {
         muxPlaybackId: playbackId,
       });
 
-      resetFlow();
-      setOpen(false);
-      router.push(`/sets/${created.setId}`);
+      if (clipDurationSeconds <= 60) {
+        setStep("calibrating");
+        setIsConfirming(false);
+      } else {
+        resetFlow(); setOpen(false); router.push(`/sets/${created.setId}`);
+      }
     } catch (error) {
       setErrorMessage(getMessageFromConvexError(error));
       setIsConfirming(false);
@@ -352,8 +409,28 @@ export default function UploadSetDialog() {
       return;
     }
 
+    if (isConfirming) return;
+    if (uploadSessionId && !window.confirm("Discard upload?")) return;
     void cleanupTemporaryUploadAndClose();
   }
+
+  async function saveCalibration(intervals: ManualInterval[]) {
+    if (!uploadSessionId) return;
+    setIsConfirming(true); setErrorMessage(null);
+    try {
+      const result = await confirmCalibration({ uploadSessionId, intervals });
+      resetFlow(); setOpen(false); router.push(`/sets/${result.setId}`);
+    } catch (error) {
+      setErrorMessage(getSafeErrorMessage(error)); setIsConfirming(false);
+    }
+  }
+
+  if (open && step === "calibrating") return <CalibrationDialog
+    source={localSource} duration={clipDurationSeconds} trimStart={trimRangeStartSeconds}
+    saving={isConfirming || isCleaningUp} error={errorMessage}
+    onConfirm={regions => void saveCalibration(regions)}
+    onDiscard={() => handleDialogOpenChange(false)}
+  />;
 
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
@@ -408,6 +485,7 @@ export default function UploadSetDialog() {
                   const trimmedTitle = title.trim();
 
                   setSelectedFile(file);
+                  setLocalSource(URL.createObjectURL(file));
                   setErrorMessage(null);
 
                   if (
@@ -459,7 +537,7 @@ export default function UploadSetDialog() {
           <Button
             type="button"
             variant="outline"
-            onClick={() => void cleanupTemporaryUploadAndClose()}
+            onClick={() => handleDialogOpenChange(false)}
             disabled={isCleaningUp || isConfirming}
           >
             {isCleaningUp ? <LoaderCircle className="size-4 animate-spin" /> : null}

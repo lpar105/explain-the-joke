@@ -224,7 +224,7 @@ export const getCleanupSnapshot = internalQuery({
           cleanupMuxPlayback: [],
           transcribeWords: ["transcript-raw.json"],
           normalizeLines: ["lines-normalized.json"],
-          preprocessLaughAudio: ["cleaned-audio.wav"],
+          preprocessLaughAudio: ["cleaned-audio.wav", "score-track.json"],
           detectLaughCandidates: ["laugh-candidates-raw.json"],
           normalizeLaughRegions: ["laugh-regions-normalized.json"],
         }[attempt.stepName];
@@ -381,6 +381,8 @@ export const deleteDataBatch = internalMutation({
         return { done: false };
       }
 
+      if (ingestJob.calibrationInputId) await ctx.storage.delete(ingestJob.calibrationInputId);
+      if (ingestJob.calibrationResultId) await ctx.storage.delete(ingestJob.calibrationResultId);
       await ctx.db.delete(ingestJob._id);
       return { done: false };
     }
@@ -558,5 +560,48 @@ export const runCleanup = internalAction({
       });
       return null;
     }
+  },
+});
+
+// Uploads abandoned before trim have no Set root or ingest ledger yet.
+export const cleanupUnfinishedUpload = internalAction({
+  args: { uploadSessionId: v.id("uploadSessions") },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const session = await ctx.runQuery(internal.setDeletion.getUnfinishedUpload, args);
+    if (!session) return null;
+    try {
+      if (session.muxAssetId) await deleteMuxAsset(session.muxAssetId);
+      await cancelMuxUpload(session.muxUploadId);
+      await ctx.runMutation(internal.setDeletion.removeUnfinishedUpload, args);
+    } catch {
+      await ctx.scheduler.runAfter(30_000, internal.setDeletion.cleanupUnfinishedUpload, args);
+    }
+    return null;
+  },
+});
+export const getUnfinishedUpload = internalQuery({
+  args: { uploadSessionId: v.id("uploadSessions") },
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.uploadSessionId);
+    return session?.status === "discarded" && !session.confirmedSetId ? session : null;
+  },
+});
+export const removeUnfinishedUpload = internalMutation({
+  args: { uploadSessionId: v.id("uploadSessions") },
+  handler: async (ctx, args) => {
+    const session = await ctx.db.get(args.uploadSessionId);
+    if (session?.status === "discarded" && !session.confirmedSetId) await ctx.db.delete(session._id);
+  },
+});
+
+export const cleanupLateArtifacts = internalAction({
+  args: { keys: v.array(v.string()) },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const keys = args.keys.filter(key => key.startsWith("set-ingest/") && !key.split("/").includes(".."));
+    try { await deleteKnownBunnyArtifacts(ctx, keys); }
+    catch { await ctx.scheduler.runAfter(30_000, internal.setDeletion.cleanupLateArtifacts, { keys }); }
+    return null;
   },
 });

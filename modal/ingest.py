@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -49,6 +50,7 @@ class Artifact:
         "playbackMedia",
         "thumbnail",
         "cleanedAudio",
+        "scoreTrack",
         "transcriptRaw",
         "laughCandidatesRaw",
     ]
@@ -223,6 +225,7 @@ def _expect_output_artifact(
         "playbackMedia",
         "thumbnail",
         "cleanedAudio",
+        "scoreTrack",
         "transcriptRaw",
         "laughCandidatesRaw",
     ],
@@ -486,10 +489,11 @@ def _preprocess_laugh_audio_impl(payload: WorkerPayload) -> list[Artifact]:
     retained_artifact = _expect_input_artifact(payload, "retainedMedia")
     cleaned_artifact = _expect_output_artifact(payload, "cleanedAudio")
 
-    highpass_hz = os.environ.get("MODAL_LAUGH_HIGHPASS_HZ", "120")
-    lowpass_hz = os.environ.get("MODAL_LAUGH_LOWPASS_HZ", "3200")
-    noise_reduction = os.environ.get("MODAL_LAUGH_NOISE_REDUCTION", "12")
-    normalize_target = os.environ.get("MODAL_LAUGH_NORMALIZE_TARGET_DB", "-18")
+    manual_only = any(a.kind == "scoreTrack" for a in payload.outputArtifacts)
+    highpass_hz = "120" if manual_only else os.environ.get("MODAL_LAUGH_HIGHPASS_HZ", "120")
+    lowpass_hz = "3200" if manual_only else os.environ.get("MODAL_LAUGH_LOWPASS_HZ", "3200")
+    noise_reduction = "12" if manual_only else os.environ.get("MODAL_LAUGH_NOISE_REDUCTION", "12")
+    normalize_target = "-18" if manual_only else os.environ.get("MODAL_LAUGH_NORMALIZE_TARGET_DB", "-18")
 
     filter_chain = ",".join(
         [
@@ -528,7 +532,45 @@ def _preprocess_laugh_audio_impl(payload: WorkerPayload) -> list[Artifact]:
             ],
         )
 
-        return [_upload_to_bunny(cleaned_path, cleaned_artifact)]
+        outputs = [_upload_to_bunny(cleaned_path, cleaned_artifact)]
+        if manual_only:
+            score_artifact = _expect_output_artifact(payload, "scoreTrack")
+            track = _manual_score_track(cleaned_path, retained_path, retained_artifact.key)
+            score_path = temp_path / score_artifact.fileName
+            score_path.write_text(json.dumps(track, allow_nan=False), encoding="utf-8")
+            outputs.append(_upload_to_bunny(score_path, score_artifact))
+        return outputs
+
+
+def _manual_score_track(cleaned_path: Path, retained_path: Path, retained_key: str) -> dict[str, Any]:
+    """Score extraction only: no threshold fitting or automatic segmentation."""
+    import numpy as np
+
+    with wave.open(str(cleaned_path), "rb") as wav_file:
+        if (wav_file.getframerate(), wav_file.getsampwidth(), wav_file.getnchannels()) != (16000, 2, 1):
+            raise RuntimeError("Invalid cleaned audio format")
+        raw = wav_file.readframes(wav_file.getnframes())
+    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    if len(audio) == 0:
+        raise RuntimeError("Empty cleaned audio")
+    energies = []
+    for start in range(0, len(audio), 640):
+        frame = audio[start:start + 640]
+        zcr = float(np.mean(np.abs(np.diff(np.signbit(frame).astype(np.int8))))) if len(frame) > 1 else 0.0
+        energies.append(float(np.sqrt(np.mean(np.square(frame)))) * (1.0 + zcr))
+    # Explicit padding preserves one frame per input frame, including tiny Sets.
+    values = np.array(energies, dtype=np.float32)
+    smoothed = np.convolve(np.pad(values, (3, 2)), np.ones(6, dtype=np.float32) / 6, mode="valid")
+    if not np.all(np.isfinite(smoothed)):
+        raise RuntimeError("Non-finite score track")
+    reference = max(float(np.percentile(smoothed, 75)), float(smoothed.mean()) + 1.85 * float(smoothed.std()))
+    return {
+        "version": "rms-zcr-v1", "preprocessingVersion": "bandpass-afftdn-attenuation-v1",
+        "retainedMediaKey": retained_key,
+        "retainedMediaSha256": hashlib.sha256(retained_path.read_bytes()).hexdigest(),
+        "totalDuration": len(audio) / 16000, "frameSeconds": 0.04,
+        "intensityReference": reference, "scores": smoothed.tolist(),
+    }
 
 
 def _detect_laugh_candidates_impl(payload: WorkerPayload) -> list[Artifact]:

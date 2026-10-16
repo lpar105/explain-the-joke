@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as calibration from "../calibration.js";
+import type * as uploadLifecycle from "../uploadLifecycle.js";
 import type * as auth from "../auth.js";
 import type * as bunny from "../bunny.js";
 import type * as bunnyStream from "../bunnyStream.js";
@@ -26,6 +28,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  calibration: typeof calibration;
+  uploadLifecycle: typeof uploadLifecycle;
   auth: typeof auth;
   bunny: typeof bunny;
   bunnyStream: typeof bunnyStream;
