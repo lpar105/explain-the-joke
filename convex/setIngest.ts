@@ -1729,6 +1729,26 @@ async function runPlaybackBranch(args: {
   }
 }
 
+// Keep slow CDN polling outside the analysis workflow journal batch.
+export const runPlaybackMigration = workflow.define({
+  args: { ingestJobId: v.id("ingestJobs"), setId: v.id("sets") },
+}).handler(async (step, args): Promise<void> => {
+  await runPlaybackBranch({ ...args, step });
+});
+
+export const startPlaybackMigration = internalMutation({
+  args: { ingestJobId: v.id("ingestJobs") },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const job = await getActiveIngestJob(ctx, args.ingestJobId);
+    if (!job || job.playbackWorkflowId) return null;
+    const playbackWorkflowId: WorkflowId = await start(ctx, internal.setIngest.runPlaybackMigration,
+      { ingestJobId: job._id, setId: job.setId }, { startAsync: true });
+    await ctx.db.patch(job._id, { playbackWorkflowId });
+    return null;
+  },
+});
+
 export const runSetIngest = workflow
   .define({
     args: {
@@ -1793,6 +1813,7 @@ export const runSetIngest = workflow
     }
 
     try {
+      await step.runMutation(internal.setIngest.startPlaybackMigration, { ingestJobId: args.ingestJobId });
       const linesReady = runLineBranch({
         breakdownId: context.breakdownId,
         ingestJobId: args.ingestJobId,
@@ -1800,11 +1821,6 @@ export const runSetIngest = workflow
       });
 
       await Promise.all([
-        runPlaybackBranch({
-          ingestJobId: args.ingestJobId,
-          setId: context.setId,
-          step,
-        }),
         linesReady,
         runLaughBranch({
           breakdownId: context.breakdownId,

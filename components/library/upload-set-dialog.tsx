@@ -779,6 +779,15 @@ function TrimRangeEditor(props: {
             <button
               type="button"
               aria-label="Trim start"
+              role="slider"
+              aria-valuemin={0}
+              aria-valuemax={props.durationSeconds}
+              aria-valuenow={props.trimRangeStartSeconds}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                updateTrimStart(Math.round((props.trimRangeStartSeconds + (event.key === "ArrowLeft" ? -0.1 : 0.1)) * 1000) / 1000, seekToTimeSeconds);
+              }}
               onPointerDown={(event) =>
                 beginHandleDrag("start", event, seekToTimeSeconds)
               }
@@ -789,6 +798,15 @@ function TrimRangeEditor(props: {
             <button
               type="button"
               aria-label="Trim end"
+              role="slider"
+              aria-valuemin={0}
+              aria-valuemax={props.durationSeconds}
+              aria-valuenow={props.trimRangeEndSeconds}
+              onKeyDown={(event) => {
+                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                event.preventDefault();
+                updateTrimEnd(Math.round((props.trimRangeEndSeconds + (event.key === "ArrowLeft" ? -0.1 : 0.1)) * 1000) / 1000, seekToTimeSeconds);
+              }}
               onPointerDown={(event) =>
                 beginHandleDrag("end", event, seekToTimeSeconds)
               }

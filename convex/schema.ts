@@ -178,6 +178,7 @@ export default defineSchema({
     calibrationStatus: v.optional(v.union(v.literal("pending"), v.literal("running"), v.literal("succeeded"), v.literal("failed"))),
     calibrationErrorCode: v.optional(v.string()),
     calibrationRetryable: v.optional(v.boolean()),
+    playbackWorkflowId: v.optional(v.string()),
     workflowId: v.optional(v.string()),
     status: ingestJobStatusValidator,
     activePlaybackMigrationStep: v.optional(ingestStepNameValidator),

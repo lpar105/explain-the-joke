@@ -8,17 +8,17 @@
  * @module
  */
 
-import type * as calibration from "../calibration.js";
-import type * as uploadLifecycle from "../uploadLifecycle.js";
 import type * as auth from "../auth.js";
 import type * as bunny from "../bunny.js";
 import type * as bunnyStream from "../bunnyStream.js";
+import type * as calibration from "../calibration.js";
 import type * as http from "../http.js";
 import type * as setDeletion from "../setDeletion.js";
 import type * as setDeletionNode from "../setDeletionNode.js";
 import type * as setIngest from "../setIngest.js";
 import type * as setIngestModal from "../setIngestModal.js";
 import type * as sets from "../sets.js";
+import type * as uploadLifecycle from "../uploadLifecycle.js";
 import type * as workflow from "../workflow.js";
 
 import type {
@@ -28,17 +28,17 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  calibration: typeof calibration;
-  uploadLifecycle: typeof uploadLifecycle;
   auth: typeof auth;
   bunny: typeof bunny;
   bunnyStream: typeof bunnyStream;
+  calibration: typeof calibration;
   http: typeof http;
   setDeletion: typeof setDeletion;
   setDeletionNode: typeof setDeletionNode;
   setIngest: typeof setIngest;
   setIngestModal: typeof setIngestModal;
   sets: typeof sets;
+  uploadLifecycle: typeof uploadLifecycle;
   workflow: typeof workflow;
 }>;
 

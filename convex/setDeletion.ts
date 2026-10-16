@@ -94,11 +94,11 @@ async function deleteBunnyPrefix(setId: string) {
     throw new Error(`Bunny Storage cleanup failed with status ${response.status}.`);
   }
 
-  const cdnApiKey = process.env.BUNNY_CDN_API_KEY;
+  const cdnApiKey = process.env.BUNNY_CDN_API_KEY ?? process.env.BUNNY_ACCOUNT_API_KEY;
   const cdnHostname = process.env.BUNNY_CDN_HOSTNAME;
   if (!cdnApiKey || !cdnHostname) {
     throw new Error(
-      "Missing BUNNY_CDN_API_KEY or BUNNY_CDN_HOSTNAME in the Convex environment.",
+      "Missing BUNNY_CDN_API_KEY/BUNNY_ACCOUNT_API_KEY or BUNNY_CDN_HOSTNAME in the Convex environment.",
     );
   }
 
@@ -209,7 +209,7 @@ export const getCleanupSnapshot = internalQuery({
     for await (const ingestJob of ctx.db
       .query("ingestJobs")
       .withIndex("by_setId", (q) => q.eq("setId", setId))) {
-      workflowIds.push(ingestJob.workflowId ?? "");
+      workflowIds.push(ingestJob.workflowId ?? "", ingestJob.playbackWorkflowId ?? "");
       for await (const attempt of ctx.db
         .query("ingestStepAttempts")
         .withIndex("by_ingestJobId", (q) => q.eq("ingestJobId", ingestJob._id))) {

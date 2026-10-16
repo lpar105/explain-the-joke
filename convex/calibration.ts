@@ -5,7 +5,7 @@ import { toConvexError } from '../lib/errors';
 import { api, components, internal } from './_generated/api';
 import type { Id } from './_generated/dataModel';
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from './_generated/server';
-import { getBunnyArtifactCdnUrl } from './bunny';
+import { getBunnyArtifactStorageUrl, getBunnyStorageApiKey } from './bunny';
 import { CONTACT_TIMEOUT_MS } from './uploadLifecycle';
 
 const intervalValidator = v.object({ start: v.number(), end: v.number() });
@@ -122,7 +122,7 @@ export const publishManual = internalAction({
     const artifact = await ctx.runQuery(internal.setIngest.getCanonicalArtifact, { ...args, kind: 'scoreTrack' });
     const retained = await ctx.runQuery(internal.setIngest.getCanonicalArtifact, { ...args, kind: 'retainedMedia' });
     if (!artifact || retained?.key !== snapshot.retainedMedia.key) throw new Error('Calibration media mismatch.');
-    const response = await fetch(getBunnyArtifactCdnUrl(artifact.key));
+    const response = await fetch(getBunnyArtifactStorageUrl(artifact.key), { headers: { AccessKey: getBunnyStorageApiKey() } });
     if (!response.ok) throw new Error('Calibration score track unavailable.');
     const track = await response.json() as ScoreTrack;
     if (track.retainedMediaKey !== snapshot.retainedMedia.key || !/^[a-f0-9]{64}$/.test(track.retainedMediaSha256)) throw new Error('Score track media mismatch.');

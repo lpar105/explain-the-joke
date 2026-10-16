@@ -61,6 +61,9 @@ describe('calibration commitment and publication', () => {
       totalDuration: duration, frameSeconds: 0.04, intensityReference: 2, scores: Array(Math.ceil(duration / 0.04)).fill(1),
     }))));
     await f.t.action(internal.calibration.publishManual, { ingestJobId: f.ingestJobId });
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("storage.bunnycdn.com"), {
+      headers: { AccessKey: expect.any(String) },
+    });
     const saved = await f.t.run(async ctx => ({
       regions: await ctx.db.query('laughRegions').collect(),
       job: await ctx.db.get(f.ingestJobId), breakdown: await ctx.db.get(f.breakdownId),
@@ -149,4 +152,14 @@ describe('calibration commitment and publication', () => {
     expect(await f.asOwner.mutation(api.uploadLifecycle.contact, { uploadSessionId: f.uploadSessionId })).toBe(false);
     expect(await f.t.run(ctx => ctx.db.get(f.setId))).toBeNull();
   });
+});
+
+it('discard tracks both the analysis and independent playback workflow for cancellation', async () => {
+  vi.useFakeTimers();
+  const f = await prepared();
+  await f.t.run(ctx => ctx.db.patch(f.ingestJobId, { workflowId: 'analysis-workflow', playbackWorkflowId: 'playback-workflow' }));
+  await f.asOwner.mutation(api.sets.discardUploadSession, { uploadSessionId: f.uploadSessionId });
+  const deletion = await f.t.run(ctx => ctx.db.query('setDeletionJobs').first());
+  const snapshot = await f.t.query(internal.setDeletion.getCleanupSnapshot, { deletionJobId: deletion!._id });
+  expect(snapshot?.workflowIds).toEqual(['analysis-workflow', 'playback-workflow']);
 });
