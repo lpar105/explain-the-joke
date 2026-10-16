@@ -4,7 +4,8 @@ import { SignInButton, SignUpButton } from '@clerk/nextjs'
 import { Authenticated, AuthLoading, Unauthenticated, useMutation, useQuery } from 'convex/react'
 import { LoaderCircle, PencilLine } from 'lucide-react'
 import Link from 'next/link'
-import { useMemo, useState } from 'react'
+import { Suspense, useMemo, useState } from 'react'
+import CalibrationPrototype from '../../components/library/calibration-prototype'
 
 import { api } from '../../convex/_generated/api'
 import type { Id } from '../../convex/_generated/dataModel'
@@ -50,6 +51,7 @@ type LibrarySet = {
 export default function LibraryPage() {
   return (
     <main className="min-h-[calc(100vh-4.5rem)] bg-[#faf8f5] px-4 py-5 text-[#1a1a1a] md:px-6">
+      <Suspense fallback={null}><CalibrationPrototype /></Suspense>
       <div className="mx-auto flex min-h-full max-w-7xl flex-col gap-6">
         <section className="border-2 border-[#1a1a1a] bg-white shadow-[6px_6px_0px_0px_#1a1a1a]">
           <div className="grid gap-4 border-b-2 border-[#1a1a1a] bg-[#f0ede8] p-4 md:grid-cols-[1fr_auto] md:items-end">
