@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#141714"><title>Folder 4 — Headshot Select</title>
+  <link rel="icon" href="data:,"><link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/review.css">
+  <script src="/review.js" defer></script>
+</head>
+<body class="review-page">
+  <header class="topbar">
+    <a class="brand brand-link" href="/"><span class="brand-mark">◎</span><div>HEADSHOT <span>SELECT</span><small>LEX PARKER / THE SHORTLIST</small></div></a>
+    <nav class="review-nav" aria-label="Workspace"><a href="/">Sort headshots</a><a class="active" aria-current="page" href="/review">Review folder 4</a></nav>
+    <span class="local-badge"><i></i> SAVED ON THIS COMPUTER</span>
+  </header>
+  <main class="review-main">
+    <section class="workspace-heading review-heading"><div><p class="eyebrow">FOLDER 4 / LIKE ENOUGH TO EDIT</p><h1>A second look<span>.</span></h1><p class="review-intro">Your shortlist, all together. Pick your favorites. Give the others another look.</p></div><div class="queue-info"><span id="review-total">—</span><div>photos to consider<small>Originals & saved crops</small></div></div></section>
+    <section class="gallery-toolbar" aria-label="Review filters">
+      <div class="filter-tabs" role="group" aria-label="Filter photos by mark">
+        <button data-filter="all" aria-pressed="true">All photos <span>0</span></button>
+        <button data-filter="favorite" aria-pressed="false">♡ Favorites <span>0</span></button>
+        <button data-filter="bad" aria-pressed="false">× Bad <span>0</span></button>
+        <button data-filter="blank" aria-pressed="false">○ Blank <span>0</span></button>
+      </div>
+      <button id="reload-gallery" class="quiet-button">↻ Refresh folder</button>
+    </section>
+    <div class="gallery-instructions"><span>Click a photo to preview · use the buttons below it to mark</span><span id="save-status" role="status" aria-live="polite">Marks save automatically</span></div>
+    <div id="gallery" class="review-gallery" aria-label="Folder 4 photos"></div>
+    <div id="gallery-empty" class="gallery-empty" hidden><span>◎</span><h2>No photos here yet.</h2><p id="empty-description">Photos you sort into folder 4 will appear here.</p><button id="show-all" class="quiet-button">Show all photos</button></div>
+    <footer class="review-footer"><div><span class="footer-label">REVIEWING</span><span id="review-folder">Desktop\headshots\4 - like enough to edit</span></div><span>Marks keep every file in its current folder.</span></footer>
+  </main>
+
+  <dialog id="review-viewer" class="review-viewer" aria-label="Headshot preview">
+    <div class="viewer-image-area"><img id="viewer-image" alt="Selected headshot"><div id="viewer-image-loading" class="viewer-image-loading" hidden>Loading full image…</div><div class="viewer-navigation"><button id="previous-photo" aria-label="Previous photo">←</button><span id="viewer-position"></span><button id="next-photo" aria-label="Next photo">→</button></div></div>
+    <aside class="viewer-sidebar"><div class="viewer-sidebar-top"><span class="eyebrow">THE SECOND LOOK</span><button id="close-viewer" class="quiet-button" aria-label="Close preview">Close <kbd>Esc</kbd></button></div><span id="viewer-kind" class="file-kind">Original</span><h2 id="viewer-name"></h2><span id="viewer-dimensions" class="muted"></span><div class="viewer-status" id="viewer-status">Unmarked</div><p class="viewer-prompt">How does this one feel?</p><div id="viewer-marks" class="viewer-marks"><button data-mark="favorite" aria-pressed="false">♡ <span>Favorite</span><kbd>F</kbd></button><button data-mark="bad" aria-pressed="false">× <span>Bad</span><kbd>B</kbd></button><button data-mark="blank" aria-pressed="false">○ <span>Leave blank</span><kbd>U</kbd></button></div><p class="viewer-help">← → to move between photos<br>Marks save automatically. Change them any time.</p></aside>
+  </dialog>
+  <a id="edit-review-photo" hidden href="/">Crop & size previews</a>
+  <div id="review-error" class="error-toast" role="alert" hidden><span></span><button id="dismiss-review-error" aria-label="Dismiss error">×</button></div>
+</body>
+</html>

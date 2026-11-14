@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#141714">
+  <title>Headshot Select — Lex Parker</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <svg class="icon-defs" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-aperture" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m14.3 3.3 5.2 9M20 8H9.5M18 19l-5.2-9M10 21l-5.2-9M4 16h10.5M6 5l5.2 9"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M5 12h14m-5-5 5 5-5 5"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M8 4 3 9l5 5M3 9h11a7 7 0 0 1 0 14"/></symbol>
+    <symbol id="i-crop" viewBox="0 0 24 24"><path d="M6 2v16h16M2 6h16v16"/></symbol>
+    <symbol id="i-flip" viewBox="0 0 24 24"><path d="M12 3v2m0 4v2m0 4v2m0 4v1M3 7v10l6-5ZM21 7v10l-6-5Z"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></symbol>
+    <symbol id="i-skip" viewBox="0 0 24 24"><path d="m5 5 10 7-10 7ZM19 5v14"/></symbol>
+    <symbol id="i-heart" viewBox="0 0 24 24"><path d="M20.8 4.6a5.6 5.6 0 0 0-8 .1L12 5.5l-.8-.8a5.6 5.6 0 0 0-8 7.9L12 21l8.8-8.4a5.6 5.6 0 0 0 0-8Z"/></symbol>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 11.5a9 9 0 0 1-9 9 10 10 0 0 1-4-.9L3 21l1.4-5a9 9 0 1 1 16.6-4.5Z"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4 20-7ZM11 13 22 2"/></symbol>
+    <symbol id="i-bookmark" viewBox="0 0 24 24"><path d="M5 3h14v19l-7-5-7 5Z"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><path d="M3 3h18v18H3ZM3 9h18M3 15h18M9 3v18M15 3v18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  </defs></svg>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark"><svg><use href="#i-aperture"/></svg></span><div>HEADSHOT <span>SELECT</span><small>LEX PARKER / THE SHORTLIST</small></div></div>
+    <div class="progress-wrap"><span><b id="sorted-count">0</b> sorted <span class="muted">/</span> <b id="total-count">188</b></span><div class="progress-track"><div id="progress-fill"></div></div></div>
+    <a class="review-nav-link" href="/review">Review folder 4 ↗</a>
+  </header>
+
+  <main>
+    <section class="workspace-heading">
+      <div><p class="eyebrow">THE SAME SHOT. EVERY FIRST IMPRESSION.</p><h1>See yourself in context<span>.</span></h1></div>
+      <div class="queue-info"><span id="remaining-count">—</span><div>photos remaining<small>random order · both batches</small></div></div>
+    </section>
+
+    <section class="workbench" aria-label="Headshot comparison workspace">
+      <div class="workbench-toolbar">
+        <div class="file-info"><span class="file-dot"></span><b id="filename">Loading your headshots…</b><span id="batch" class="batch-label"></span><span id="dimensions" class="muted"></span></div>
+        <div class="toolbar-actions"><button id="original-button" class="quiet-button" disabled><svg><use href="#i-expand"/></svg>Original <kbd>O</kbd></button><span class="divider"></span><label class="scale-label" for="view-scale">View</label><select id="view-scale" aria-label="Preview scale"><option value="fit">Fit all</option><option value="0.5">50%</option><option value="0.75">75%</option><option value="1">100% · actual pixels</option></select><span id="scale-readout" class="scale-readout">—</span></div>
+      </div>
+
+      <div id="comparison-viewport" class="comparison-viewport">
+        <div id="comparison-board" class="comparison-board">
+          <section class="preview-column instagram-post-column">
+            <div class="preview-label"><span>01 <b>Instagram post</b></span><span>Square · 1:1</span></div>
+            <article class="instagram-post mockup">
+              <div class="ig-post-header"><div class="crop-photo mini-avatar" role="img" aria-label="Post avatar"><img alt=""></div><div><b>lexparkercomedy</b><small>Auckland, New Zealand</small></div><b class="more-dots">···</b></div>
+              <div class="crop-photo ig-post-photo" role="img" aria-label="Instagram post preview"><img alt="Selected headshot as an Instagram post" draggable="false"></div>
+              <div class="ig-post-footer"><div class="ig-actions"><svg><use href="#i-heart"/></svg><svg><use href="#i-chat"/></svg><svg><use href="#i-send"/></svg><svg class="save-icon"><use href="#i-bookmark"/></svg></div><b>128 likes</b><p><b>lexparkercomedy</b> A new face for the feed.</p><small>View all 8 comments</small><small class="ig-timestamp">JUST NOW</small></div>
+            </article>
+            <p class="placement-note">The feed test. Does it stop the scroll?</p>
+          </section>
+
+          <section class="preview-column instagram-profile-column">
+            <div class="preview-label"><span>02 <b>Instagram profile</b></span><span>150 px avatar</span></div>
+            <article class="instagram-profile mockup">
+              <div class="ig-profile-nav"><b>lexparkercomedy</b><span>⌄ &nbsp; ☰</span></div>
+              <div class="ig-profile-top"><div class="story-ring"><div class="crop-photo profile-avatar" role="img" aria-label="Instagram profile picture preview"><img alt="Selected headshot in a circular profile picture" draggable="false"></div></div><div class="ig-stats"><span><b>32</b>posts</span><span><b>1,284</b>followers</span><span><b>642</b>following</span></div></div>
+              <div class="ig-bio"><b>Lex Parker</b><span class="ig-category">Comedian</span><span>Dry wit. Several concerns.</span><span>Stand-up in Aotearoa 🇳🇿</span><span class="ig-link">comedy.co.nz</span></div>
+              <div class="ig-profile-buttons"><span>Following ⌄</span><span>Message</span></div>
+              <div class="ig-grid-tabs"><svg><use href="#i-grid"/></svg><span>▣</span><span>♙</span></div>
+              <div class="ig-grid"><div class="crop-photo"><img alt="Profile grid headshot" draggable="false"></div><div class="grid-stage"><span>LIVE<br>AT THE<br>CLASSIC</span></div><div class="grid-quote">perfectly<br>reasonable<br><em>concerns.</em></div></div>
+            </article>
+            <div class="tiny-avatars"><div class="crop-photo avatar-44"><img alt="44 pixel avatar" draggable="false"></div><div><b>And at a glance</b><small>44 px · comments & notifications</small></div></div>
+          </section>
+
+          <section class="preview-column comedy-profile-column">
+            <div class="preview-label"><span>03 <b>Comedy.co.nz profile</b></span><span>170 px photo</span></div>
+            <article class="comedy-profile mockup classic">
+              <div class="classic-nav"><div class="classic-logo"><small>the</small>CLASSIC<span>Comedy Network</span></div><span>COMEDY GUIDE ▾ &nbsp; COMEDIANS ▾</span></div>
+              <div class="classic-banner"><div class="banner-placeholder tone-1"></div><div class="banner-photo-wrap"><div class="crop-photo banner-photo" role="img" aria-label="Comedy website top banner preview"><img alt="Selected headshot in the top banner" draggable="false"></div><span>ON TONIGHT →</span></div><div class="banner-placeholder tone-2"></div></div>
+              <div class="classic-content"><h2>PROFILE</h2><div class="classic-profile-layout"><div class="crop-photo classic-headshot" role="img" aria-label="Comedy website profile photo preview"><img alt="Selected headshot as the comedian profile photo" draggable="false"></div><div class="classic-profile-text"><h3>Lex PARKER <span>🇳🇿</span></h3><h4>2026 Raw Comedy Quest Finalist</h4><div class="classic-tabs"><span>♟ Profile</span><span>▦ Gigs (1)</span></div><p>With a dry wit and several concerns, queer comedian Lex Parker takes a close look at everyday life.</p><p>Turning private anxieties into public entertainment.</p><p>Instagram: @lexparkercomedy</p><b class="awards">AWARDS</b></div></div><div class="classic-enquire">Lex PARKER is available for hire. <span>Click here to enquire.</span></div></div>
+            </article>
+            <p class="placement-note">Main profile + 124 px “On tonight” banner.</p>
+            <a class="reference-link" href="https://www.comedy.co.nz/comedians/profiles/lex-parker/" target="_blank" rel="noreferrer">View reference ↗</a>
+          </section>
+
+          <section class="preview-column comedy-guide-column">
+            <div class="preview-label"><span>04 <b>A Week of It</b></span><span>42 & 70 px photos</span></div>
+            <article class="comedy-guide mockup classic">
+              <div class="classic-nav"><div class="classic-logo"><small>the</small>CLASSIC<span>Comedy Network</span></div><span>COMEDY GUIDE ▾ &nbsp; COMEDIANS ▾</span></div>
+              <div class="classic-banner"><div class="banner-placeholder tone-2"></div><div class="banner-photo-wrap"><div class="crop-photo banner-photo" role="img" aria-label="Calendar page top banner preview"><img alt="Selected headshot in the calendar banner" draggable="false"></div><span>ON TONIGHT →</span></div><div class="banner-placeholder tone-1"></div></div>
+              <div class="classic-content"><h2>A WEEK OF IT - COMEDY CALENDAR</h2><div class="classic-week"><span>← Last Week</span><b>19 – 25 October</b><span>Next Week →</span></div><div class="calendar-day muted-day"><span>Tuesday 20 Oct</span><small>NO SHOWS TONIGHT</small></div><div class="calendar-day"><span>Wednesday 21 Oct</span><div class="calendar-thumbs"><span class="other-comedian tone-1"></span><div class="crop-photo calendar-thumb" role="img" aria-label="42 pixel calendar thumbnail preview"><img alt="Selected headshot in the calendar row" draggable="false"></div><span class="other-comedian tone-2"></span></div></div><div class="show-detail"><div class="show-poster">BiG<br><small>WEDNESDAY</small><em>Fresh Comedy</em></div><div class="show-description"><h3>Big Wednesday - Fresh Comedy Night</h3><h5>7:30 p.m. at The Classic</h5><p>Every Wednesday it's fresh comedy night, a stand-up adventure.</p><h6>FEATURING:</h6><div class="lineup"><span class="lineup-placeholder tone-2"></span><div><div class="lineup-frame"><div class="crop-photo lineup-photo" role="img" aria-label="70 pixel expanded lineup preview"><img alt="Selected headshot in the expanded show lineup" draggable="false"></div></div><span>Lex Parker</span></div><span class="lineup-placeholder tone-1"></span></div><div class="book-tickets">Book Tickets</div></div></div></div>
+            </article>
+            <p class="placement-note">Collapsed calendar row + expanded lineup.</p>
+            <a class="reference-link" href="https://www.comedy.co.nz/comedy-guide/a-week-of-it/" target="_blank" rel="noreferrer">View reference ↗</a>
+          </section>
+        </div>
+        <div id="empty-state" class="empty-state" hidden><svg><use href="#i-check"/></svg><h2>Every shot has a home.</h2><p>Your sorted photos are waiting in the five Desktop folders.</p><button id="empty-undo" class="quiet-button">Undo last rating</button></div>
+      </div>
+
+      <div class="crop-controls" aria-label="Live crop controls">
+        <div class="crop-title"><svg><use href="#i-crop"/></svg><b>Live crop</b><span>Zoom, then drag any photo to reframe</span></div>
+        <label class="range-control">Zoom <input id="crop-zoom" type="range" min="1" max="4" step="0.01" value="1"><output id="zoom-value">1.00×</output></label>
+        <label class="range-control pan-control">X <input id="crop-x" aria-label="Crop horizontal position" type="range" min="0" max="100" step="0.1" value="50"></label>
+        <label class="range-control pan-control">Y <input id="crop-y" aria-label="Crop vertical position" type="range" min="0" max="100" step="0.1" value="50"></label>
+        <button id="flip-crop" class="quiet-button flip-button" aria-pressed="false" title="Flip horizontally in previews and the saved crop"><svg><use href="#i-flip"/></svg>Flip</button>
+        <button id="reset-crop" class="quiet-button">Reset</button>
+        <label class="save-crop"><input id="save-crop" type="checkbox"><span class="checkbox-mark"><svg><use href="#i-check"/></svg></span>Save crop too</label>
+      </div>
+      <div class="crop-explainer"><span id="crop-message">Preview crop only. Check “Save crop too” to keep a cropped JPEG alongside the original.</span><span>Same crop · same scale · every placement</span></div>
+    </section>
+
+    <section id="review-size-previews" class="size-previews" hidden aria-label="Actual-size crop previews">
+      <div class="size-heading"><div><b>Actual-size checks</b><span>Same crop at real CSS pixel sizes</span></div><label>Shape <select id="size-shape"><option value="square">Square</option><option value="circle">Circle</option></select></label></div>
+      <div class="size-preview-row">
+        <div><div class="crop-photo" style="width:32px;height:32px"><img alt="Crop at 32 pixels" draggable="false"></div><span>32 px</span></div>
+        <div><div class="crop-photo" style="width:48px;height:48px"><img alt="Crop at 48 pixels" draggable="false"></div><span>48 px</span></div>
+        <div><div class="crop-photo" style="width:70px;height:70px"><img alt="Crop at 70 pixels" draggable="false"></div><span>70 px</span></div>
+        <div><div class="crop-photo" style="width:124px;height:124px"><img alt="Crop at 124 pixels" draggable="false"></div><span>124 px</span></div>
+        <div><div class="crop-photo" style="width:170px;height:170px"><img alt="Crop at 170 pixels" draggable="false"></div><span>170 px</span></div>
+        <div><div class="crop-photo" style="width:320px;height:320px"><img alt="Crop at 320 pixels" draggable="false"></div><span>320 px</span></div>
+      </div>
+    </section>
+    <section id="review-editor-actions" class="review-editor-actions" hidden aria-label="Save this crop">
+      <button id="save-review-crop" disabled>Save cropped copy</button><a class="review-nav-link" href="/review">Back to folder 4</a><span id="saved-review-crop" role="status" aria-live="polite"></span>
+    </section>
+    <section class="rating-section" aria-label="Rate and move the current headshot">
+      <div class="rating-heading"><span>GIVE IT A HOME</span><span>Press a number to move & continue</span></div>
+      <div class="rating-actions"><div id="rating-buttons" class="rating-buttons"></div><div class="secondary-actions"><button id="undo-button" class="secondary-button" disabled><svg><use href="#i-undo"/></svg><span>Undo<kbd>Z</kbd></span></button><button id="skip-button" class="secondary-button" disabled><svg><use href="#i-skip"/></svg><span>Skip<kbd>Space</kbd></span></button></div></div>
+    </section>
+    <footer><div><span class="footer-label">FROM</span><span id="source-path">Downloads\headshots</span><svg><use href="#i-arrow"/></svg><span class="footer-label">TO</span><span id="destination-path">Desktop\headshots\1–5</span></div><button id="refresh-button" class="quiet-button">↻ Refresh queue</button></footer>
+  </main>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <div id="error" class="error-toast" role="alert" hidden><span></span><button id="dismiss-error" aria-label="Dismiss error">×</button></div>
+  <dialog id="original-dialog"><div class="dialog-heading"><div><b id="original-title">Original headshot</b><small>Original file · uncropped</small></div><button id="close-original" class="quiet-button" aria-label="Close original">Close <kbd>Esc</kbd></button></div><img id="original-image" alt="Original uncropped headshot"></dialog>
+</body>
+</html>

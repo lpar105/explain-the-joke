@@ -117,3 +117,52 @@ describe("set ingest attempts", () => {
     expect(typeof attempt?.finishedAt).toBe("number");
   });
 });
+
+it("backfills a legacy Breakdown once and preserves its distinct timed Laugh Regions", async () => {
+  const t = createConvexTest();
+  const breakdownId = await t.run(async (ctx) => {
+    const setId = await ctx.db.insert("sets", {
+      ownerTokenIdentifier: "clerk:legacy",
+      setStatus: "playable",
+      title: "Legacy Set",
+      trimRangeStartSeconds: 12,
+      trimRangeEndSeconds: 20,
+    });
+    const breakdownId = await ctx.db.insert("breakdowns", {
+      setId,
+      editability: "editable",
+      lineSeedingState: "ready",
+      laughSeedingState: "ready",
+    });
+    const lineId = await ctx.db.insert("lines", {
+      breakdownId, ordinal: 1, startSeconds: 0, endSeconds: 8, text: "First second",
+      wordCount: 2, laughCount: 2, laughIntensityScore: 0.94,
+    });
+    await ctx.db.insert("laughRegions", {
+      breakdownId, lineId, ordinal: 1, startSeconds: 2, endSeconds: 2.4, intensityScore: 0.9,
+    });
+    await ctx.db.insert("laughRegions", {
+      breakdownId, lineId, ordinal: 2, startSeconds: 3.1, endSeconds: 5.3, intensityScore: 0.4,
+    });
+    return breakdownId;
+  });
+
+  const args = { breakdownId, words: [[
+    { word: "First", start: 1, end: 1.4 },
+    { word: "second", start: 2.6, end: 2.9 },
+  ]] };
+  expect(await t.mutation(internal.setIngest.backfillSpokenLineBreakdown, args)).toBe(true);
+  expect(await t.mutation(internal.setIngest.backfillSpokenLineBreakdown, args)).toBe(false);
+  const saved = await t.run(async (ctx) => ({
+    lines: await ctx.db.query("lines").collect(),
+    laughs: await ctx.db.query("laughRegions").collect(),
+  }));
+  expect(saved.lines).toMatchObject([
+    { text: "First", startSeconds: 0, endSeconds: 2.6, laughCount: 1, laughIntensityScore: 0.9 },
+    { text: "second", startSeconds: 2.6, endSeconds: 8, laughCount: 1, laughIntensityScore: 0.4 },
+  ]);
+  expect(saved.laughs).toMatchObject([
+    { lineId: saved.lines[0]._id, startSeconds: 2, endSeconds: 2.4, intensityScore: 0.9 },
+    { lineId: saved.lines[1]._id, startSeconds: 3.1, endSeconds: 5.3, intensityScore: 0.4 },
+  ]);
+});

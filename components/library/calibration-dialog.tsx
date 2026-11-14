@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { validateManualSample } from '../../lib/calibration'
+import { CALIBRATION_SAMPLE_SECONDS, constrainLaughMark, retimeLaughMark, validateManualSample } from '../../lib/calibration'
 import { Check, GripVertical, Pause, Play, Trash2 } from 'lucide-react'
 import { Button } from '../ui/button'
 
@@ -18,7 +18,7 @@ type CalibrationProps = {
   trimStart: number;
   saving: boolean;
   error: string | null;
-  onConfirm: (regions: Region[]) => void;
+  onConfirm: (sampleStart: number, regions: Region[]) => void;
   onDiscard: () => void;
 };
 
@@ -31,48 +31,56 @@ export default function CalibrationDialog(props: CalibrationProps) {
   const [regions, setRegions] = useState<Region[]>([])
   const [mark, setMark] = useState<number | null>(null)
 
-  const [zoom, setZoom] = useState(1)
-  const [loop, setLoop] = useState(true)
   const [playing, setPlaying] = useState(false)
   const [frames, setFrames] = useState<string[]>([])
   const video = useRef<HTMLVideoElement>(null)
   const timeline = useRef<HTMLDivElement>(null)
   const dragging = useRef<{ kind: 'sample' | 'create' | 'start' | 'end'; origin: number; index?: number; sample: number } | null>(null)
   const [draft, setDraft] = useState<Region | null>(null)
-  const length = Math.min(60, duration)
-  const end = sample + length
+  const length = Math.min(CALIBRATION_SAMPLE_SECONDS, duration)
+  const lastSampleStart = duration - length
+  const canChooseSample = lastSampleStart > 0
+  const end = Math.min(duration, sample + length)
+  const sampleBounds = { start: sample, end }
   const annotating = step === 'annotate'
   const viewStart = annotating ? sample : 0
   const viewLength = annotating ? length : duration
   let valid = true
-  try { validateManualSample(duration, regions) } catch { valid = false }
+  try { validateManualSample(duration, regions, sample) } catch { valid = false }
   const percent = (value: number) => (value - viewStart) / viewLength * 100
   function seek(value: number) {
     const next = clamp(value, annotating ? sample : 0, annotating ? end : duration)
     setCursor(next)
     if (video.current) video.current.currentTime = next + props.trimStart
   }
+  function togglePlayback() {
+    const media = video.current
+    if (!media) return
+    if (media.paused) void media.play()
+    else media.pause()
+  }
   function add(a: number, b: number) {
-    const start = clamp(Math.min(a, b), sample, end)
-    const finish = clamp(Math.max(a, b), sample, end)
-    if (finish > start) setRegions(old => [...old, { start, end: finish }].sort((a, b) => a.start - b.start))
+    setRegions(old => {
+      const region = constrainLaughMark(a, b, sampleBounds, old)
+      return region ? [...old, region].sort((a, b) => a.start - b.start) : old
+    })
   }
   function seconds(clientX: number) {
     const bounds = timeline.current!.getBoundingClientRect()
-    return viewStart + clamp((clientX - bounds.left) / bounds.width, 0, 1) * viewLength
+    return viewStart + (clientX - bounds.left) / bounds.width * viewLength
   }
   function move(clientX: number) {
     const action = dragging.current
     if (!action) return
     const value = seconds(clientX)
     if (action.kind === 'sample') {
-      const next = clamp(action.sample + value - action.origin, 0, duration - length)
+      const next = clamp(action.sample + value - action.origin, 0, lastSampleStart)
       setSample(next); seek(next)
-    } else if (action.kind === 'create') setDraft({ start: Math.min(action.origin, value), end: Math.max(action.origin, value) })
-    else {
-      setRegions(old => old.map((region, index) => index !== action.index ? region : {
-        ...region, [action.kind]: action.kind === 'start' ? clamp(value, sample, region.end - .05) : clamp(value, region.start + .05, end),
-      }))
+    } else if (action.kind === 'create') {
+      setDraft(constrainLaughMark(action.origin, value, sampleBounds, regions))
+    } else if (action.index !== undefined) {
+      const { index, kind, origin } = action
+      setRegions(old => retimeLaughMark(old, index, kind, value - origin, sampleBounds))
     }
   }
   // Generate actual thumbnails from the local video, like the Mux strip in TrimRangeEditor.
@@ -96,7 +104,12 @@ export default function CalibrationDialog(props: CalibrationProps) {
   }, [source, viewStart, viewLength, props.trimStart])
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (props.saving || !open || !annotating || (event.target as HTMLElement).closest('input,textarea,select,[contenteditable]')) return
+      if (props.saving || !open || !annotating || dragging.current || (event.target as HTMLElement).closest('input,textarea,select,[contenteditable]')) return
+      if (event.key === ' ' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        event.preventDefault()
+        if (!event.repeat) togglePlayback()
+        return
+      }
       if (event.key.toLowerCase() === 'i') { event.preventDefault(); setMark(cursor) }
       if (event.key.toLowerCase() === 'o' && mark !== null) { event.preventDefault(); add(mark, cursor); setMark(null) }
     }
@@ -106,82 +119,99 @@ export default function CalibrationDialog(props: CalibrationProps) {
   function changeStep(next: 'select' | 'annotate') {
     video.current?.pause(); setPlaying(false); setStep(next); setMark(null); seek(sample)
   }
-  const player = <div className="flex h-[min(50dvh,34rem)] min-h-48 items-center justify-center overflow-hidden border-2 border-[#1a1a1a] bg-black sm:min-h-56">
-    <video key={step} ref={video} src={source} controls playsInline className="block h-full w-full bg-black object-contain" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onLoadedMetadata={e => {
+  const player = <div className="relative min-h-14 flex-1 overflow-hidden border-2 border-[#1a1a1a] bg-black">
+    <video key={step} ref={video} src={source} controls playsInline className="absolute inset-0 h-full w-full bg-black object-contain" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onLoadedMetadata={e => {
       e.currentTarget.currentTime = props.trimStart + sample; setCursor(sample)
+    }} onEnded={e => {
+      if (!annotating) return
+      e.currentTarget.currentTime = props.trimStart + sample
+      void e.currentTarget.play()
     }} onTimeUpdate={e => {
       const media = e.currentTarget
       const retainedTime = media.currentTime - props.trimStart
-      if (!media.paused && (retainedTime >= end || retainedTime < sample)) {
-        if (loop) media.currentTime = props.trimStart + sample
-        else { media.pause(); media.currentTime = props.trimStart + end }
+      const playbackStart = annotating ? sample : 0
+      const playbackEnd = annotating ? end : duration
+      if (!media.paused && retainedTime < playbackStart) {
+        media.currentTime = props.trimStart + playbackStart
+      } else if (!media.paused && retainedTime >= playbackEnd) {
+        if (annotating) media.currentTime = props.trimStart + playbackStart
+        else { media.pause(); media.currentTime = props.trimStart + playbackEnd }
       }
-      setCursor(clamp(media.currentTime - props.trimStart, 0, duration))
+      setCursor(clamp(media.currentTime - props.trimStart, playbackStart, playbackEnd))
     }} />
   </div>
-  const strip = <div className="overflow-x-auto">
-    <div ref={timeline} className={`relative touch-none select-none overflow-hidden border-2 border-[#1a1a1a] bg-[#f0ede8] ${annotating ? 'h-24 sm:h-28 cursor-crosshair' : 'h-24 sm:h-28 cursor-pointer'}`} style={{ width: `${annotating ? zoom * 100 : 100}%` }} onPointerDown={e => {
-      if (props.saving || e.button !== 0) return
+  const strip = <div className="shrink-0 border-2 border-[#1a1a1a] bg-[#f0ede8] px-2">
+    <div ref={timeline} aria-label={annotating ? 'Laughter timeline' : 'Calibration sample timeline'} className={`relative h-[clamp(3rem,12dvh,7rem)] touch-none select-none ${annotating ? 'cursor-crosshair' : 'cursor-pointer'}`} onPointerDown={e => {
+      if (props.saving || !e.isPrimary || e.button !== 0) return
       const value = seconds(e.clientX)
       if (!dragging.current) {
-        if (annotating) { dragging.current = { kind: 'create', origin: value, sample }; setDraft({ start: value, end: value }) }
+        if (annotating) dragging.current = { kind: 'create', origin: clamp(value, sample, end), sample }
         else { seek(value); return }
       }
       e.currentTarget.setPointerCapture(e.pointerId)
     }} onPointerMove={e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) move(e.clientX) }} onPointerUp={e => {
+      if (!e.currentTarget.hasPointerCapture(e.pointerId)) return
       const action = dragging.current
       if (action?.kind === 'create') { const value = seconds(e.clientX); if (Math.abs(action.origin - value) < .05) seek(value); else add(action.origin, value) }
+      else move(e.clientX)
       dragging.current = null; setDraft(null)
-      if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
-    }} onPointerCancel={() => { dragging.current = null; setDraft(null) }}>
-      <div className="pointer-events-none grid h-full grid-cols-8">{Array.from({ length: 8 }, (_, index) => frames[index] ? <img key={index} src={frames[index]} alt="" className="h-full w-full object-cover" /> : <div key={index} className="border-r border-[#d4cec6] bg-[linear-gradient(180deg,#e3ddd6_0%,#f7f3ee_100%)]" />)}</div>
+    }} onLostPointerCapture={() => { dragging.current = null; setDraft(null) }}>
+      <div className="pointer-events-none grid h-full grid-cols-8 grid-rows-1 overflow-hidden">{Array.from({ length: 8 }, (_, index) => frames[index] ? <img key={index} src={frames[index]} alt="" className="h-full min-h-0 w-full object-cover" /> : <div key={index} className="border-r border-[#d4cec6] bg-[linear-gradient(180deg,#e3ddd6_0%,#f7f3ee_100%)]" />)}</div>
       {!annotating ? <>
         <div className="pointer-events-none absolute inset-y-0 left-0 bg-[#1a1a1a]/55" style={{ width: `${percent(sample)}%` }} />
         <div className="pointer-events-none absolute inset-y-0 right-0 bg-[#1a1a1a]/55" style={{ width: `${100 - percent(end)}%` }} />
-        <div role="slider" aria-label="Calibration sample position" aria-valuenow={sample} aria-valuemin={0} aria-valuemax={duration - length} tabIndex={0} className="absolute inset-y-0 cursor-grab border-2 border-[#1a1a1a] bg-[#ffd966]/25 active:cursor-grabbing" style={{ left: `${percent(sample)}%`, width: `${length / duration * 100}%` }} onKeyDown={e => {
-          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); const next = clamp(sample + (e.key === 'ArrowLeft' ? -1 : 1), 0, duration - length); setSample(next); seek(next) }
-        }} onPointerDown={e => { dragging.current = { kind: 'sample', origin: seconds(e.clientX), sample } }}>
-          <span className="absolute left-0 top-1/2 flex h-5 w-4 -translate-y-1/2 items-center justify-center border-2 border-black bg-[#c41e3a]"><GripVertical className="size-3 text-white" /></span>
-          <span className="absolute right-0 top-1/2 flex h-5 w-4 -translate-y-1/2 items-center justify-center border-2 border-black bg-[#c41e3a]"><GripVertical className="size-3 text-white" /></span>
+        <div role="slider" aria-label="Calibration sample position" aria-valuetext={stamp(sample) + ' to ' + stamp(end)} aria-valuenow={sample} aria-valuemin={0} aria-valuemax={lastSampleStart} tabIndex={canChooseSample ? 0 : undefined} aria-disabled={!canChooseSample} className={'absolute inset-y-0 border-2 border-[#1a1a1a] bg-[#ffd966]/25 ' + (canChooseSample ? 'cursor-grab active:cursor-grabbing' : '')} style={{ left: `${percent(sample)}%`, width: `${length / duration * 100}%` }} onKeyDown={e => {
+          if (!canChooseSample || props.saving) return
+          if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+            e.preventDefault()
+            const next = clamp(sample + (e.key === 'ArrowLeft' ? -1 : 1), 0, lastSampleStart)
+            setSample(next); seek(next)
+          }
+        }} onPointerDown={e => {
+          if (canChooseSample && !props.saving && e.isPrimary && e.button === 0) {
+            dragging.current = { kind: 'sample', origin: seconds(e.clientX), sample }
+          }
+        }}>
+          {canChooseSample && <><span className="absolute left-0 top-1/2 flex h-5 w-4 -translate-y-1/2 items-center justify-center border-2 border-black bg-[#c41e3a]"><GripVertical className="size-3 text-white" /></span>
+          <span className="absolute right-0 top-1/2 flex h-5 w-4 -translate-y-1/2 items-center justify-center border-2 border-black bg-[#c41e3a]"><GripVertical className="size-3 text-white" /></span></>}
         </div>
-      </> : <>{regions.map((region, index) => <div key={index} className="absolute inset-y-1 border-2 border-[#1a1a1a] bg-[#ffd966]/80" style={{ left: `${percent(region.start)}%`, width: `${(region.end - region.start) / length * 100}%` }}>
-        <span className="pointer-events-none px-3 text-[10px] font-black">{index + 1}</span>
-        <button aria-label={`Delete laugh ${index + 1}`} className="absolute right-3 top-1 bg-[#ffd966] p-1" onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setRegions(old => old.filter((_, i) => i !== index)) }}><Trash2 className="size-3" /></button>
-        {(['start', 'end'] as const).map(edge => <button key={edge} aria-label={`Drag laugh ${index + 1} ${edge}`} className={`absolute inset-y-0 w-3 cursor-ew-resize border-black bg-[#c41e3a] ${edge === 'start' ? 'left-0 border-r-2' : 'right-0 border-l-2'}`} onPointerDown={() => { dragging.current = { kind: edge, origin: 0, index, sample } }} />)}
-      </div>)}{draft && <div className="pointer-events-none absolute inset-y-1 border-2 border-black bg-[#ffd966]/60" style={{ left: `${percent(draft.start)}%`, width: `${(draft.end - draft.start) / length * 100}%` }} />}</>}
+      </> : <>{regions.map((region, index) => <div key={index} className="absolute inset-y-0 bg-[#ffd966]/80" style={{ left: `${percent(region.start)}%`, width: `${(region.end - region.start) / length * 100}%` }}>
+        <button aria-label={`Delete laugh ${index + 1}`} className="absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2 bg-[#ffd966] p-0.5 focus:z-30" onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); setRegions(old => old.filter((_, i) => i !== index)) }}><Trash2 className="size-3" /></button>
+        {(['start', 'end'] as const).map(edge => <button key={edge} aria-label={`Drag laugh ${index + 1} ${edge}`} className={`absolute z-20 h-[30%] w-4 cursor-ew-resize border border-black bg-[#c41e3a] focus:z-30 ${edge === 'start' ? 'top-0 left-0 -translate-x-1/2' : 'right-0 bottom-0 translate-x-1/2'}`} onPointerDown={e => {
+          if (props.saving || !e.isPrimary || e.button !== 0) return
+          dragging.current = { kind: edge, origin: seconds(e.clientX) - region[edge], index, sample }
+        }} />)}
+      </div>)}{draft && <div className="pointer-events-none absolute inset-y-0 bg-[#ffd966]/60 ring-1 ring-black ring-inset" style={{ left: `${percent(draft.start)}%`, width: `${(draft.end - draft.start) / length * 100}%` }} />}</>}
       <div className="pointer-events-none absolute inset-y-0 w-[3px] bg-[#c41e3a]" style={{ left: `calc(${percent(cursor)}% - 1px)` }} />
     </div>
   </div>
   return <>
     <Dialog key={step} open={open} onOpenChange={next => { if (!next && !props.saving) props.onDiscard() }}>
-      <DialogContent className="flex h-[calc(100dvh-1rem)] max-h-[60rem] max-w-6xl flex-col overflow-hidden p-0 sm:h-auto sm:max-h-[calc(100dvh-2rem)]">
-        <DialogHeader><DialogTitle>{annotating ? 'Mark the laughs' : 'Select Calibration Sample'}</DialogTitle><DialogDescription>{annotating ? 'Step 2 of 2 · Mark every laugh in your selected sample' : 'Trim confirmed · Step 1 of 2 · Use the whole retained Set'}</DialogDescription></DialogHeader>
-        <fieldset disabled={props.saving} className="grid min-h-0 flex-1 gap-3 overflow-y-auto p-3 sm:p-4">
-          {player}
-          {strip}
-          <div className="flex justify-between gap-2 font-mono text-[11px] text-[#6d675f]"><span>{stamp(viewStart)}</span><span className="text-center">{annotating ? 'Drag to mark laughter · drag red edges to retime' : 'Entire retained Set'}</span><span>{stamp(viewStart + viewLength)}</span></div>
-          {!annotating ? <>
-            <p className="text-xs text-[#6d675f]">The whole retained Set is your sample. Include laughter and unmarked non-laughter.</p>
-          </> : <>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => { if (!video.current) return; if (video.current.paused) void video.current.play(); else video.current.pause() }}>{playing ? <Pause /> : <Play />} {playing ? 'Pause' : 'Play'}</Button><Button size="sm" variant="outline" onClick={() => setMark(cursor)}>Start laugh (I)</Button><Button size="sm" variant="outline" disabled={mark === null} onClick={() => { add(mark!, cursor); setMark(null) }}>End laugh (O)</Button></div>
-              <div className="flex items-center gap-3 text-xs"><label><input type="checkbox" checked={loop} onChange={e => setLoop(e.target.checked)} /> Loop sample</label><label className="flex items-center gap-2">Zoom<input aria-label="Timeline zoom" type="range" min="1" max="5" value={zoom} onChange={e => setZoom(+e.target.value)} className="w-20" /></label></div>
-            </div>
-            {mark !== null && <p className="text-xs">Laugh starts at {stamp(mark)}. Mark its end with O.</p>}
-          </>}
-          {annotating && !valid && <p role="status" className="text-xs">Mark laughter and leave non-laughter unmarked. Marks must not overlap.</p>}
-          {props.error && <p role="alert" className="text-sm text-[#a61b32]">Upload not saved. {props.error}</p>}
+      <DialogContent className="flex h-[calc(100dvh-1rem)] max-h-[48rem] max-w-6xl flex-col overflow-y-auto p-0 sm:h-[calc(100dvh-2rem)]">
+        <DialogHeader className="shrink-0 py-3 pr-14"><DialogTitle className="text-lg sm:text-2xl">{annotating ? 'Mark the laughs' : 'Select Calibration Sample'}</DialogTitle><DialogDescription className={annotating ? 'sr-only' : undefined}>{annotating ? 'Step 2 of 2 · Mark every laugh in your selected sample' : canChooseSample ? 'Step 1 of 2 · Drag to choose a 60-second sample' : 'Step 1 of 2 · Use the whole retained Set'}</DialogDescription></DialogHeader>
+        <fieldset disabled={props.saving} className="contents">
+          <div className="flex min-w-0 flex-1 flex-col gap-2 p-2 sm:p-3">
+            {player}
+            {strip}
+            {!annotating ? <>
+              <div className="flex justify-between gap-2 font-mono text-[11px] text-[#6d675f]"><span>{stamp(viewStart)}</span><span className="text-center">{canChooseSample ? stamp(sample) + ' to ' + stamp(end) : 'Entire retained Set'}</span><span>{stamp(viewStart + viewLength)}</span></div>
+              <p className="text-xs text-[#6d675f]">{canChooseSample ? "Choose a minute with both laughter and non-laughter." : "Include laughter and unmarked non-laughter."}</p>
+            </> : <>
+              <div className="flex flex-wrap gap-1 sm:gap-2"><Button size="sm" className="px-2 tracking-normal sm:px-3" variant="outline" aria-keyshortcuts="Space" onClick={togglePlayback}>{playing ? <Pause /> : <Play />} {playing ? 'Pause' : 'Play'}</Button><Button size="sm" className="px-2 tracking-normal sm:px-3" variant="outline" onClick={() => setMark(cursor)}>Start laugh (I)</Button><Button size="sm" className="px-2 tracking-normal sm:px-3" variant="outline" disabled={mark === null} onClick={() => { add(mark!, cursor); setMark(null) }}>End laugh (O)</Button></div>
+            </>}
+            {props.error && <p role="alert" className="text-sm text-[#a61b32]">Upload not saved. {props.error}</p>}
+          </div>
         </fieldset>
-        <DialogFooter className="shrink-0 border-t-2 border-[#1a1a1a] bg-[#faf8f5] p-3 sm:p-4">
-          <Button disabled={props.saving} variant="outline" onClick={props.onDiscard}>Cancel</Button>
-          {annotating && <Button disabled={props.saving} variant="outline" onClick={() => {
+        <DialogFooter className="shrink-0 border-t-2 border-[#1a1a1a] bg-[#faf8f5] p-2 sm:p-3">
+          <Button size="sm" disabled={props.saving} variant="outline" onClick={props.onDiscard}>Cancel</Button>
+          {annotating && <Button size="sm" disabled={props.saving} variant="outline" onClick={() => {
             if (regions.length && !window.confirm('Discard existing laugh marks?')) return
             setRegions([]); changeStep('select')
           }}>Choose another sample</Button>}
-          <Button disabled={props.saving || (annotating && (!valid || mark !== null))} onClick={() => {
-            if (!annotating) { setZoom(1); changeStep('annotate') }
-            else { video.current?.pause(); props.onConfirm(regions) }
-          }}><Check />{props.saving ? 'Saving…' : annotating ? 'Confirm Calibration' : 'Use whole Set'}</Button>
+          <Button size="sm" disabled={props.saving || (annotating && (!valid || mark !== null))} onClick={() => {
+            if (!annotating) changeStep('annotate')
+            else { video.current?.pause(); props.onConfirm(sample, regions) }
+          }}><Check />{props.saving ? 'Saving…' : annotating ? 'Confirm Calibration' : canChooseSample ? 'Use selected minute' : 'Use whole Set'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

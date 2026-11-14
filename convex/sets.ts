@@ -1,8 +1,9 @@
 import { abandonUpload, CONTACT_TIMEOUT_MS } from "./uploadLifecycle";
 import { v } from "convex/values";
 
-import { isAllowedDevEmail } from "../lib/dev-access";
 import { toConvexError } from "../lib/errors";
+import { isAllowedSetDevEmail } from "../lib/dev-access";
+import { mergeLaugh } from "../lib/breakdown-lines";
 import { composeTranscriptText } from "../lib/setAnalysis";
 import { getBunnyArtifactCdnUrl } from "./bunny";
 import type { Id } from "./_generated/dataModel";
@@ -197,6 +198,7 @@ export const listForViewer = query({
           _id: set._id,
           _creationTime: set._creationTime,
           currentBreakdownId: set.currentBreakdownId ?? null,
+          performanceDate: set.performanceDate ?? null,
           setStatus: set.setStatus,
           title: set.title,
           trimRangeEndSeconds: set.trimRangeEndSeconds,
@@ -512,9 +514,66 @@ export const getDevPipelineDashboard = query({
   },
 });
 
+export const listDevArtifacts = query({
+  args: { setId: v.string() },
+  handler: async (ctx, { setId }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity || !isAllowedSetDevEmail(identity.email, identity.emailVerified)) return null;
+
+    const id = ctx.db.normalizeId("sets", setId);
+    const set = id ? await ctx.db.get(id) : null;
+    if (!set || set.provisional || set.ownerTokenIdentifier !== identity.tokenIdentifier) return null;
+
+    const jobs = await ctx.db.query("ingestJobs")
+      .withIndex("by_setId", (q) => q.eq("setId", set._id))
+      .order("desc")
+      .collect();
+
+    const artifactsByJob = await Promise.all(jobs.map(async (job) => {
+      const artifacts = await ctx.db.query("ingestArtifacts")
+        .withIndex("by_ingestJobId", (q) => q.eq("ingestJobId", job._id))
+        .order("desc")
+        .collect();
+      const calibrationArtifacts = [];
+      for (const { id, kind, fileName } of [
+        { id: job.calibrationInputId, kind: "calibrationInput" as const, fileName: "calibration-input.json" },
+        { id: job.calibrationResultId, kind: "calibrationResult" as const, fileName: "calibration-result.json" },
+      ]) {
+        if (!id) continue;
+        calibrationArtifacts.push({
+          id: `${job._id}/${fileName}`,
+          kind,
+          fileName,
+          contentType: "application/json",
+          isCanonical: true,
+          url: await ctx.storage.getUrl(id),
+        });
+      }
+
+      return [
+        ...artifacts.map((artifact) => ({
+          id: String(artifact._id),
+          kind: artifact.kind,
+          fileName: artifact.fileName,
+          contentType: artifact.contentType ?? null,
+          isCanonical: artifact.isCanonical,
+          url: getBunnyArtifactCdnUrl(artifact.path),
+        })),
+        ...calibrationArtifacts,
+      ];
+    }));
+
+    return artifactsByJob.flatMap((artifacts, index) => artifacts.map((artifact) => ({
+      ...artifact,
+      run: jobs.length > 1 ? jobs.length - index : null,
+      isCurrentBreakdown: jobs[index].breakdownId === set.currentBreakdownId,
+    })));
+  },
+});
+
 export const getSetPageForViewer = query({
   args: {
-    setId: v.id("sets"),
+    setId: v.string(),
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
@@ -523,7 +582,8 @@ export const getSetPageForViewer = query({
     }
 
     const tokenIdentifier = identity.tokenIdentifier;
-    const set = await ctx.db.get(args.setId);
+    const setId = ctx.db.normalizeId("sets", args.setId);
+    const set = setId ? await ctx.db.get(setId) : null;
 
     if (set === null || set.provisional || set.ownerTokenIdentifier !== tokenIdentifier) {
       return null;
@@ -556,13 +616,13 @@ export const getSetPageForViewer = query({
         .withIndex("by_breakdownId_and_ordinal", (q) =>
           q.eq("breakdownId", currentBreakdown._id),
         )
-        .take(2_000);
+        .take(8_192);
       const laughRegions = await ctx.db
         .query("laughRegions")
         .withIndex("by_breakdownId_and_ordinal", (q) =>
           q.eq("breakdownId", currentBreakdown._id),
         )
-        .take(4_000);
+        .take(8_192);
 
       if (lines.length > 0) {
         const laughsByLineId = new Map<
@@ -579,7 +639,7 @@ export const getSetPageForViewer = query({
         for (const laughRegion of laughRegions) {
           const existing = laughsByLineId.get(laughRegion.lineId) ?? [];
           existing.push({
-            index: existing.length + 1,
+            index: laughRegion.ordinal,
             start_time: laughRegion.startSeconds,
             end_time: laughRegion.endSeconds,
             duration: Math.max(
@@ -637,6 +697,8 @@ export const getSetPageForViewer = query({
     return {
       _id: set._id,
       title: set.title,
+      setStatus: set.setStatus,
+      isOwner: set.ownerTokenIdentifier === tokenIdentifier,
       trimRangeStartSeconds: set.trimRangeStartSeconds,
       trimRangeEndSeconds: set.trimRangeEndSeconds,
       activePlaybackSource: activePlaybackSource
@@ -662,13 +724,150 @@ export const getSetPageForViewer = query({
               laughSeedingState: currentBreakdown.laughSeedingState,
               lineFailureCode: currentBreakdown.lineFailureCode ?? null,
               laughFailureCode: currentBreakdown.laughFailureCode ?? null,
+              editRevision: currentBreakdown.editRevision ?? 0,
+              laughsEdited: currentBreakdown.laughsEdited ?? false,
             },
       ingestJobStatus: ingestJob?.status ?? null,
-      calibrationRetryable: Boolean(ingestJob?.calibrationRequired && ingestJob.calibrationInputId && ingestJob.status === "failed" && !currentBreakdown?.laughSeededAt),
       analysisData,
     };
   },
 });
+
+export const saveBreakdownEdits = mutation({
+  args: {
+    setId: v.id("sets"),
+    breakdownId: v.id("breakdowns"),
+    editRevision: v.number(),
+    textEdits: v.array(v.object({ index: v.number(), text: v.string() })),
+    laughs: v.optional(v.array(v.object({
+      index: v.union(v.number(), v.null()),
+      start: v.number(),
+      end: v.number(),
+    }))),
+  },
+  handler: async (ctx, args) => {
+    const owner = await requireViewerTokenIdentifier(ctx);
+    const set = await ctx.db.get("sets", args.setId);
+    if (!set || set.provisional || set.ownerTokenIdentifier !== owner) throw toConvexError("not_found");
+    const breakdown = await ctx.db.get("breakdowns", args.breakdownId);
+    if (!breakdown || set.currentBreakdownId !== breakdown._id ||
+        breakdown.setId !== set._id || (breakdown.editRevision ?? 0) !== args.editRevision) {
+      return "stale" as const;
+    }
+    if (breakdown.editability !== "editable" || breakdown.lineSeedingState !== "ready" ||
+        (breakdown.laughSeedingState !== "ready" && breakdown.laughSeedingState !== "failed")) {
+      throw toConvexError("processing_unavailable");
+    }
+
+    const lines = await ctx.db.query("lines")
+      .withIndex("by_breakdownId_and_startSeconds", q => q.eq("breakdownId", breakdown._id))
+      .take(8_193);
+    if (lines.length > 8_192) throw toConvexError("processing_unavailable");
+    const textByIndex = new Map(args.textEdits.map(({ index, text }) => [index, text.trim()]));
+    const validLineIndices = new Set(lines.map(line => line.ordinal));
+    if (textByIndex.size !== args.textEdits.length ||
+        [...textByIndex].some(([index, text]) => !text || !validLineIndices.has(index))) {
+      throw toConvexError("validation");
+    }
+
+    const laughs = args.laughs && await saveLaughEdits(ctx, breakdown._id, lines,
+      set.trimRangeEndSeconds - set.trimRangeStartSeconds, args.laughs);
+    for (const line of lines) {
+      const text = textByIndex.get(line.ordinal);
+      const region = laughs?.get(line._id);
+      const count = region ? 1 : 0;
+      const score = region?.intensityScore ?? 0;
+      await patchEditedLine(ctx, line, text, laughs ? { laughCount: count, laughIntensityScore: score } : undefined);
+    }
+    if (args.textEdits.length || args.laughs) {
+      await ctx.db.patch(breakdown._id, {
+        editRevision: args.editRevision + 1,
+        ...(args.laughs && { laughsEdited: true, spokenLinesMigrated: true }),
+      });
+    }
+    return "saved" as const;
+  },
+});
+
+async function patchEditedLine(
+  ctx: MutationCtx,
+  line: { _id: Id<"lines">; text: string; laughCount: number; laughIntensityScore: number },
+  text: string | undefined,
+  laugh: { laughCount: number; laughIntensityScore: number } | undefined,
+) {
+  const textChanged = text !== undefined && text !== line.text;
+  const laughChanged = laugh && (line.laughCount !== laugh.laughCount || line.laughIntensityScore !== laugh.laughIntensityScore);
+  if (textChanged || laughChanged) {
+    await ctx.db.patch(line._id, {
+      ...(textChanged && { text, wordCount: text.split(/\s+/).length }),
+      ...(laughChanged && laugh),
+    });
+  }
+}
+
+async function saveLaughEdits(
+  ctx: MutationCtx,
+  breakdownId: Id<"breakdowns">,
+  lines: Array<{ _id: Id<"lines">; startSeconds: number; text: string }>,
+  duration: number,
+  laughs: Array<{ index: number | null; start: number; end: number }>,
+) {
+  const originals = await ctx.db.query("laughRegions")
+    .withIndex("by_breakdownId_and_ordinal", q => q.eq("breakdownId", breakdownId))
+    .take(8_193);
+  if (originals.length > 8_192) throw toConvexError("processing_unavailable");
+  const byIndex = new Map(originals.map(region => [region.ordinal, region]));
+  const seen = new Set<number>();
+  const spokenLines = lines.filter(line => line.text.trim());
+  if (!spokenLines.length && laughs.length) throw toConvexError("validation");
+  const byLine = new Map<Id<"lines">, ReturnType<typeof mergeLaugh> & { original?: (typeof originals)[number] }>();
+  const sorted = [...laughs].sort((a, b) => a.start - b.start);
+  let lineIndex = 0;
+  let latestEnd = -Infinity;
+  let latestChangedEnd = -Infinity;
+  for (const laugh of sorted) {
+    const { index, start, end } = laugh;
+    const original = index === null ? undefined : byIndex.get(index);
+    if (index !== null) {
+      if (!original || seen.has(index)) throw toConvexError("validation");
+      seen.add(index);
+    }
+    const changed = !original || start !== original.startSeconds || end !== original.endSeconds;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start ||
+        (changed && (start < 0 || end > duration)) ||
+        start < (changed ? latestEnd : latestChangedEnd)) {
+      throw toConvexError("validation");
+    }
+    latestEnd = Math.max(latestEnd, end);
+    if (changed) latestChangedEnd = Math.max(latestChangedEnd, end);
+    while (spokenLines[lineIndex + 1]?.startSeconds <= start) lineIndex++;
+    const lineId = spokenLines[lineIndex]._id;
+    const region = { startSeconds: start, endSeconds: end, intensityScore: original?.intensityScore ?? 0.5 };
+    const earlier = byLine.get(lineId);
+    // Without another spoken Line between the starts, the marks form one Laugh Region.
+    byLine.set(lineId, earlier
+      ? { ...mergeLaugh(earlier, region), original: earlier.original ?? original }
+      : { ...region, original });
+  }
+
+  let ordinal = 0;
+  const retained = new Set<Id<"laughRegions">>();
+  for (const [lineId, { original, ...timing }] of byLine) {
+    const fields = { ...timing, lineId, ordinal: ++ordinal };
+    if (!original) {
+      await ctx.db.insert("laughRegions", { breakdownId, ...fields });
+    } else {
+      retained.add(original._id);
+      if (original.ordinal !== ordinal || original.lineId !== lineId ||
+          original.startSeconds !== timing.startSeconds || original.endSeconds !== timing.endSeconds ||
+          original.intensityScore !== timing.intensityScore) await ctx.db.patch(original._id, fields);
+    }
+  }
+  for (const region of originals) {
+    if (!retained.has(region._id)) await ctx.db.delete(region._id);
+  }
+  return byLine;
+}
 
 export const startUploadSession = mutation({
   args: {
@@ -741,7 +940,7 @@ export const confirmUploadSession = mutation({
       const set = await ctx.db.get(uploadSession.confirmedSetId);
       const job = await ctx.db.query("ingestJobs").withIndex("by_setId", q => q.eq("setId", uploadSession.confirmedSetId!)).unique();
       const source = await getActivePlaybackSource(ctx, uploadSession.confirmedSetId);
-      if (set?.currentBreakdownId && job && source) return { setId: set._id, breakdownId: set.currentBreakdownId, ingestJobId: job._id, playbackSourceId: source._id };
+      if (set?.currentBreakdownId && job && source) return { setId: set._id, breakdownId: set.currentBreakdownId, ingestJobId: job._id, playbackSourceId: source._id, needsCalibration: uploadSession.status === "calibrating" };
       throw toConvexError("not_found");
     }
 
@@ -773,9 +972,8 @@ export const confirmUploadSession = mutation({
       throw toConvexError("processing_unavailable");
     }
 
-    const calibrationRequired = args.trimRangeEndSeconds - args.trimRangeStartSeconds <= 60;
     const setId = await ctx.db.insert("sets", {
-      provisional: calibrationRequired,
+      provisional: true,
       ownerTokenIdentifier: tokenIdentifier,
       title: nextTitle,
       trimRangeStartSeconds: args.trimRangeStartSeconds,
@@ -795,8 +993,8 @@ export const confirmUploadSession = mutation({
     });
 
     const ingestJobId = await ctx.db.insert("ingestJobs", {
-      calibrationRequired,
-      ...(calibrationRequired ? { calibrationStatus: "pending" as const } : {}),
+      calibrationRequired: true,
+      calibrationStatus: "pending",
       breakdownId,
       setId,
       status: "pending",
@@ -816,7 +1014,7 @@ export const confirmUploadSession = mutation({
       muxAssetId: args.muxAssetId.trim(),
       muxPlaybackId: args.muxPlaybackId.trim(),
       durationSeconds: args.durationSeconds,
-      status: calibrationRequired ? "calibrating" : "confirmed",
+      status: "calibrating",
       lastContactAt: Date.now(),
       failureCode: undefined,
       confirmedSetId: setId,
@@ -826,7 +1024,7 @@ export const confirmUploadSession = mutation({
       ingestJobId,
     });
 
-    return { breakdownId, ingestJobId, playbackSourceId, setId };
+    return { breakdownId, ingestJobId, playbackSourceId, setId, needsCalibration: true };
   },
 });
 
@@ -1027,32 +1225,59 @@ export const markUploadSessionFailed = internalMutation({
   },
 });
 
+async function saveSetDetails(
+  ctx: MutationCtx,
+  { setId, title, performanceDate }: {
+    setId: Id<"sets">;
+    title?: string;
+    performanceDate?: string;
+  },
+) {
+  const ownerTokenIdentifier = await requireViewerTokenIdentifier(ctx);
+  const set = await ctx.db.get("sets", setId);
+  if (set === null || set.provisional || set.ownerTokenIdentifier !== ownerTokenIdentifier) {
+    throw toConvexError("not_found");
+  }
+
+  const updates: { title?: string; performanceDate?: string } = {};
+  if (title !== undefined) {
+    const nextTitle = normalizeTitle(title);
+    if (!nextTitle) {
+      throw toConvexError("validation");
+    }
+    updates.title = nextTitle;
+  }
+
+  if (performanceDate !== undefined) {
+    const date = new Date(performanceDate);
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(performanceDate) ||
+      performanceDate.startsWith("0000-") ||
+      !Number.isFinite(date.getTime()) ||
+      date.toISOString().slice(0, 10) !== performanceDate
+    ) {
+      throw toConvexError("validation");
+    }
+    updates.performanceDate = performanceDate;
+  }
+
+  await ctx.db.patch("sets", setId, updates);
+  return null;
+}
+
 export const rename = mutation({
   args: {
     setId: v.id("sets"),
     title: v.string(),
   },
-  handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
+  handler: saveSetDetails,
+});
 
-    if (identity === null) {
-      throw toConvexError("auth");
-    }
-
-    const set = await ctx.db.get(args.setId);
-    if (set === null || set.provisional || set.ownerTokenIdentifier !== identity.tokenIdentifier) {
-      throw toConvexError("not_found");
-    }
-
-    const nextTitle = normalizeTitle(args.title);
-    if (!nextTitle) {
-      throw toConvexError("validation");
-    }
-
-    await ctx.db.patch("sets", args.setId, {
-      title: nextTitle,
-    });
-
-    return null;
+export const updateDetails = mutation({
+  args: {
+    setId: v.id("sets"),
+    title: v.optional(v.string()),
+    performanceDate: v.optional(v.string()),
   },
+  handler: saveSetDetails,
 });

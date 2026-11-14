@@ -367,7 +367,7 @@ export default function UploadSetDialog() {
         muxPlaybackId: playbackId,
       });
 
-      if (clipDurationSeconds <= 60) {
+      if (created.needsCalibration) {
         setStep("calibrating");
         setIsConfirming(false);
       } else {
@@ -414,21 +414,21 @@ export default function UploadSetDialog() {
     void cleanupTemporaryUploadAndClose();
   }
 
-  async function saveCalibration(intervals: ManualInterval[]) {
+  async function saveCalibration(sampleStart: number, intervals: ManualInterval[]) {
     if (!uploadSessionId) return;
     setIsConfirming(true); setErrorMessage(null);
     try {
-      const result = await confirmCalibration({ uploadSessionId, intervals });
+      const result = await confirmCalibration({ uploadSessionId, sampleStart, intervals });
       resetFlow(); setOpen(false); router.push(`/sets/${result.setId}`);
     } catch (error) {
-      setErrorMessage(getSafeErrorMessage(error)); setIsConfirming(false);
+      setErrorMessage(getMessageFromConvexError(error)); setIsConfirming(false);
     }
   }
 
   if (open && step === "calibrating") return <CalibrationDialog
     source={localSource} duration={clipDurationSeconds} trimStart={trimRangeStartSeconds}
     saving={isConfirming || isCleaningUp} error={errorMessage}
-    onConfirm={regions => void saveCalibration(regions)}
+    onConfirm={(sampleStart, regions) => void saveCalibration(sampleStart, regions)}
     onDiscard={() => handleDialogOpenChange(false)}
   />;
 

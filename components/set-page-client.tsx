@@ -1,1071 +1,313 @@
 "use client";
 
-import Hls from "hls.js";
-import { useMemo, useRef, useState, useEffect } from "react";
-import { Check, LoaderCircle, Pause, Play, TriangleAlert } from "lucide-react";
-import { useMutation, useQuery } from "convex/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ArrowLeft, ArrowRight, Pause, Play } from "lucide-react";
+import { useConvexAuth, useQuery } from "convex/react";
 import Link from "next/link";
 
 import { api } from "../convex/_generated/api";
-import type { Id } from "../convex/_generated/dataModel";
-import type { SetAnalysisData, TranscriptSentence } from "../lib/setAnalysis";
-import {
-  getEffectivePathState,
-  getOverallProgressLabel,
-  getTrackLabel,
-  isPathProcessing,
-  type BreakdownPathState,
-  type BreakdownTrack,
-} from "../lib/breakdown-progress";
-import {
-  clampTime,
-  getClipDurationSeconds,
-  getClipTimeFromSourceTime,
-  getPlaybackWindowForSource,
-  getSourceTimeFromClipTime,
-} from "../lib/trim-range";
+import { getEffectivePathState } from "../lib/breakdown-progress";
+import { activeReviewLine, formatReviewTime as formatTime, laughNeighbors, reviewLaughs, strongestLines } from "../lib/set-review";
+import type { TranscriptSentence } from "../lib/setAnalysis";
+import { artifactType, DevCutoffControls, type SetArtifact, SetArtifactPreview, useDevCutoff } from "./set-dev-artifacts";
+import { SetEditDialog } from "./set-edit-dialog";
 import { Button } from "./ui/button";
+import { useSetPlayback } from "./use-set-playback";
+import styles from "./set-page-client.module.css";
 
-function formatTime(seconds: number) {
-  const safeSeconds = Math.max(0, seconds);
-  const minutes = Math.floor(safeSeconds / 60);
-  const remainder = Math.floor(safeSeconds % 60);
-  return `${minutes}:${remainder.toString().padStart(2, "0")}`;
+const emptyLines: TranscriptSentence[] = [];
+
+function intensityColor(score: number) {
+  return `color-mix(in srgb, var(--tf-accent-red) ${30 + 70 * score}%, var(--tf-paper-alt))`;
 }
 
-function formatPreciseTime(seconds: number) {
-  return `${Math.max(0, seconds).toFixed(2)}s`;
-}
+export default function SetPageClient({ setId, devArtifacts: artifacts }: { setId: string; devArtifacts?: SetArtifact[] }) {
+  const dev = artifacts !== undefined;
+  const { isLoading, isAuthenticated } = useConvexAuth();
+  const set = useQuery(api.sets.getSetPageForViewer, !dev || isAuthenticated ? { setId } : "skip");
+  const cutoff = useDevCutoff(setId, artifacts);
+  const [selection, setSelection] = useState("");
+  const artifact = artifacts?.find((item) => item.id === selection);
+  const selectedType = artifact ? artifactType(artifact) : null;
+  const showPreview = artifact && selectedType !== "audio" && selectedType !== "video";
+  const source = !artifact ? set?.activePlaybackSource : artifact.url && !showPreview ? {
+    _id: artifact.id,
+    provider: "bunny" as const,
+    playbackUrl: artifact.url,
+    playbackMode: "direct" as const,
+  } : null;
+  const { attachMedia, status, togglePlayback, pausePlayback, retryPlayback, seek: seekPlayback, playing, currentTime, duration, canSeek, hasPlayedSource } = useSetPlayback(source, set?.trimRangeStartSeconds ?? 0, set?.trimRangeEndSeconds ?? 0);
+  const [editSnapshot, setEditSnapshot] = useState<{
+    breakdown: NonNullable<NonNullable<typeof set>["breakdown"]>;
+    lines: TranscriptSentence[];
+    initialTime: number;
+  } | null>(null);
+  const editTrigger = useRef<HTMLButtonElement>(null);
 
-function getIntensityColor(score: number) {
-  const clamped = Math.min(1, Math.max(0, score));
-  const r = Math.round(180 + clamped * 75);
-  const g = Math.round(80 - clamped * 60);
-  const b = Math.round(80 - clamped * 60);
-  return `rgb(${r},${g},${b})`;
-}
+  const savedLines: TranscriptSentence[] = set?.analysisData?.sentences ?? emptyLines;
+  const previewLaughs = useMemo(() => cutoff.regions?.map((region, index) => ({
+    index,
+    start_time: region.start,
+    end_time: region.end,
+    duration: region.end - region.start,
+    intensity_score: region.intensityScore,
+  })), [cutoff.regions]);
+  const lines = useMemo(() => {
+    if (!previewLaughs || !savedLines.length) return savedLines;
 
-function getSelectedLine(
-  sentences: TranscriptSentence[],
-  currentTime: number,
-) {
-  if (sentences.length === 0) {
-    return null;
-  }
-
-  const startedSentences = sentences.filter(
-    (sentence) => sentence.start <= currentTime,
+    const projected = savedLines.map((line): TranscriptSentence => ({
+      ...line, laughs: [], laugh_count: 0, laugh_intensity_score: 0,
+    }));
+    let index = 0;
+    for (const laugh of previewLaughs) {
+      while (index + 1 < projected.length && projected[index + 1].start <= laugh.start_time) index++;
+      const line = projected[index];
+      line.laughs.push(laugh);
+      line.laugh_count++;
+      line.laugh_intensity_score = Math.max(line.laugh_intensity_score, laugh.intensity_score);
+    }
+    return projected;
+  }, [savedLines, previewLaughs]);
+  const laughs = useMemo(() => reviewLaughs(lines), [lines]);
+  const timelineLaughs = previewLaughs ?? laughs.map(({ laugh }) => laugh);
+  const isLaughing = hasPlayedSource && timelineLaughs.some((laugh) =>
+    laugh.start_time <= currentTime && currentTime < laugh.end_time,
   );
-  return startedSentences[startedSentences.length - 1] ?? sentences[0];
-}
+  const ranked = useMemo(() => strongestLines(lines), [lines]);
+  const [strongest, setStrongest] = useState(false);
+  const [follow, setFollow] = useState(true);
+  const [navigationTarget, setNavigationTarget] = useState<(typeof laughs)[number] | null>(null);
+  const activeLine = activeReviewLine(lines, currentTime);
+  const scrollPane = useRef<HTMLDivElement>(null);
+  const activeRow = useRef<HTMLButtonElement>(null);
+  const expectedScroll = useRef(0);
+  const rankedView = strongest && laughs.length > 0;
+  const target = navigationTarget && currentTime < navigationTarget.laugh.end_time &&
+    currentTime >= navigationTarget.line.start ? laughs.find(({ laugh }) => laugh.index === navigationTarget.laugh.index) ?? null : null;
+  const { previous, next } = laughNeighbors(laughs, currentTime, target);
 
-function ProgressSegment({ state }: { state: BreakdownPathState }) {
-  return (
-    <span
-      aria-hidden="true"
-      className={`h-full flex-1 border-r border-tf-ink last:border-r-0 ${
-        state === "ready"
-          ? "bg-tf-blue"
-          : state === "failed"
-            ? "bg-tf-red"
-            : isPathProcessing(state)
-              ? "tf-progress-active"
-              : "bg-tf-paper-alt"
-      }`}
-    />
-  );
-}
-
-function ProgressRail({
-  transcriptState,
-  laughState,
-}: {
-  transcriptState: BreakdownPathState;
-  laughState: BreakdownPathState;
-}) {
-  return (
-    <div
-      className="flex h-3 overflow-hidden border-2 border-tf-ink bg-tf-paper-alt"
-      aria-hidden="true"
-    >
-      <ProgressSegment state={transcriptState} />
-      <ProgressSegment state={laughState} />
-    </div>
-  );
-}
-
-function TrackStateIcon({ state }: { state: BreakdownPathState }) {
-  if (state === "ready") {
-    return <Check className="size-4 text-tf-blue" aria-hidden="true" />;
-  }
-
-  if (state === "failed") {
-    return <TriangleAlert className="size-4 text-tf-red" aria-hidden="true" />;
-  }
-
-  return (
-    <span
-      className="size-2 shrink-0 animate-pulse bg-tf-blue motion-reduce:animate-none"
-      aria-hidden="true"
-    />
-  );
-}
-
-function TrackStatus({
-  name,
-  state,
-  track,
-}: {
-  name: string;
-  state: BreakdownPathState;
-  track: BreakdownTrack;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 border border-tf-ink bg-white px-2.5 py-2">
-      <div className="flex items-center gap-2">
-        <TrackStateIcon state={state} />
-        <span className="text-[10px] font-black uppercase tracking-[0.16em] text-tf-ink">
-          {name}
-        </span>
-      </div>
-      <span className="text-right font-mono text-[9px] text-tf-ink-muted">
-        {getTrackLabel(track, state)}
-      </span>
-    </div>
-  );
-}
-
-function BreakdownStatusPanel({
-  className = "",
-  laughState,
-  transcriptState,
-}: {
-  className?: string;
-  laughState: BreakdownPathState;
-  transcriptState: BreakdownPathState;
-}) {
-  const isBusy =
-    isPathProcessing(transcriptState) || isPathProcessing(laughState);
-
-  return (
-    <aside
-      className={`flex min-h-0 flex-col border-tf bg-white shadow-tf-card ${className}`}
-    >
-      <div className="border-b-2 border-tf-ink bg-tf-paper-alt px-3 py-2.5">
-        <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-tf-ink-muted">
-          Breakdown Status
-        </p>
-        <p className="mt-1 text-sm font-black uppercase tracking-[0.08em] text-tf-ink">
-          {getOverallProgressLabel(transcriptState, laughState)}
-        </p>
-        <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          {getOverallProgressLabel(transcriptState, laughState)}. Transcript:{" "}
-          {getTrackLabel("transcript", transcriptState)}. Laugh analysis:{" "}
-          {getTrackLabel("laughs", laughState)}.
-        </p>
-      </div>
-
-      <div className="space-y-2 p-3" aria-busy={isBusy}>
-        <ProgressRail
-          transcriptState={transcriptState}
-          laughState={laughState}
-        />
-        <TrackStatus
-          name="Transcript"
-          state={transcriptState}
-          track="transcript"
-        />
-        <TrackStatus name="Laugh analysis" state={laughState} track="laughs" />
-        <p className="pt-1 font-mono text-[9px] leading-4 text-tf-ink-muted">
-          You can leave this page—processing will continue.
-        </p>
-      </div>
-
-      {isPathProcessing(transcriptState) ? (
-        <div className="flex-1 space-y-1 border-t-2 border-tf-ink bg-neutral-50 p-2" aria-hidden="true">
-          {["w-4/5", "w-full", "w-3/4", "w-11/12", "w-2/3"].map(
-            (width, index) => (
-              <div
-                key={index}
-                className="border border-tf-ink bg-white px-2 py-2.5"
-              >
-                <div className={`h-2 bg-tf-paper-alt ${width}`} />
-                <div className="mt-2 h-2 w-full bg-tf-paper-alt" />
-              </div>
-            ),
-          )}
-        </div>
-      ) : null}
-    </aside>
-  );
-}
-
-function CompactBreakdownStatus({
-  laughState,
-  transcriptState,
-}: {
-  laughState: BreakdownPathState;
-  transcriptState: BreakdownPathState;
-}) {
-  const isBusy =
-    isPathProcessing(transcriptState) || isPathProcessing(laughState);
-
-  return (
-    <div className="border-b-2 border-tf-ink bg-tf-paper-alt px-2.5 py-2">
-      <div className="flex items-center justify-between gap-3">
-        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-tf-ink">
-          {getOverallProgressLabel(transcriptState, laughState)}
-        </p>
-        <p className="font-mono text-[9px] text-tf-ink-muted">
-          {transcriptState === "ready"
-            ? getTrackLabel("laughs", laughState)
-            : getTrackLabel("transcript", transcriptState)}
-        </p>
-      </div>
-      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {getOverallProgressLabel(transcriptState, laughState)}. Transcript:{" "}
-        {getTrackLabel("transcript", transcriptState)}. Laugh analysis:{" "}
-        {getTrackLabel("laughs", laughState)}.
-      </p>
-      <div className="mt-1.5" aria-busy={isBusy}>
-        <ProgressRail
-          transcriptState={transcriptState}
-          laughState={laughState}
-        />
-      </div>
-    </div>
-  );
-}
-
-function BreakdownTimelineSkeleton() {
-  return (
-    <div className="space-y-3" aria-hidden="true">
-      <div className="border-tf bg-white p-2 shadow-tf-card">
-        <div className="mb-1 flex items-center justify-between gap-3 px-0.5">
-          <span className="h-2 w-8 bg-tf-paper-alt" />
-          <span className="font-mono text-[9px] font-black uppercase tracking-tf-ui text-tf-ink-muted">
-            Timeline pending
-          </span>
-          <span className="h-2 w-8 bg-tf-paper-alt" />
-        </div>
-        <div className="h-8 border-tf-subtle bg-tf-paper-alt" />
-      </div>
-      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <div className="h-10 border-2 border-tf-ink bg-tf-paper-alt" />
-        <div className="h-10 border-2 border-tf-ink bg-tf-paper-alt" />
-      </div>
-    </div>
-  );
-}
-
-function useHlsPlayback(
-  mediaElement: HTMLMediaElement | null,
-  src: string | null,
-  playbackMode: "direct" | "hls",
-) {
   useEffect(() => {
-    if (!mediaElement || !src) {
+    const pane = scrollPane.current;
+    const row = activeRow.current;
+    if (!pane || !row || !follow || !hasPlayedSource) return;
+
+    const start = pane.scrollTop;
+    const target = start + row.getBoundingClientRect().top - pane.getBoundingClientRect().top;
+    const distance = Math.min(Math.max(0, target), pane.scrollHeight - pane.clientHeight) - start;
+    if (Math.abs(distance) < 1) return;
+
+    function scrollTo(top: number) {
+      if (!pane) return;
+      pane.scrollTop = top;
+      expectedScroll.current = pane.scrollTop;
+    }
+
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      scrollTo(start + distance);
       return;
     }
 
-    if (playbackMode === "direct") {
-      mediaElement.src = src;
-      mediaElement.load();
-      return () => {
-        mediaElement.removeAttribute("src");
-        mediaElement.load();
-      };
+    const startedAt = performance.now();
+    let frame: number;
+    function animate(now: number) {
+      const progress = Math.min(1, (now - startedAt) / 220);
+      scrollTo(start + distance * (1 - (1 - progress) ** 3));
+      if (progress < 1) frame = requestAnimationFrame(animate);
     }
+    frame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(frame);
+  }, [activeLine, hasPlayedSource, follow, rankedView]);
 
-    if (mediaElement.canPlayType("application/vnd.apple.mpegurl")) {
-      mediaElement.src = src;
-      return;
-    }
+  const transcriptState = getEffectivePathState(set?.breakdown?.lineSeedingState ?? "pending", set?.ingestJobStatus ?? null);
+  const laughState = getEffectivePathState(set?.breakdown?.laughSeedingState ?? "pending", set?.ingestJobStatus ?? null);
+  const transcriptMessage = set === undefined ? "Opening transcript…" :
+    transcriptState === "failed" ? "The transcript couldn’t be prepared." :
+    transcriptState === "ready" ? "No spoken words found." :
+    transcriptState === "retrying" ? "Trying the transcript again…" : "Building transcript…";
+  const laughMessage = previewLaughs ? (previewLaughs.length ? "Previewing cutoff changes." : "No laughs at this cutoff.") :
+    lines.length === 0 ? "" :
+    set?.breakdown?.laughsEdited ? (laughs.length ? "" : "No laughs marked.") :
+    laughState === "failed" ? (set?.isOwner ? "Laugh analysis failed. You can add laughs manually." : "Laugh analysis unavailable.") :
+    laughState === "ready" ? (laughs.length ? "" : "No laughs detected.") :
+    laughState === "retrying" ? "Trying laugh analysis again…" : "Finding laughs…";
+  const playerMessage = set === undefined ? "Opening Set…" :
+    !source ? (set?.setStatus === "unavailable" ? "Playback unavailable." : "Preparing playback…") :
+    status === "loading" ? "Preparing playback…" :
+    status === "error" ? "Playback couldn’t load." :
+    status === "buffering" ? "Buffering…" : "";
 
-    if (!Hls.isSupported()) {
-      mediaElement.src = src;
-      return;
-    }
+  function seek(time: number) {
+    setNavigationTarget(null);
+    seekPlayback(time);
+  }
 
-    const hls = new Hls({
-      enableWorker: true,
-      lowLatencyMode: true,
-    });
+  function jump(destination: (typeof laughs)[number] | undefined) {
+    if (!destination) return;
+    setNavigationTarget(destination);
+    seekPlayback(destination.line.start);
+  }
 
-    hls.loadSource(src);
-    hls.attachMedia(mediaElement);
-
-    return () => {
-      hls.destroy();
-      mediaElement.removeAttribute("src");
-    };
-  }, [mediaElement, playbackMode, src]);
-}
-
-function useTrimmedPlaybackWindow(
-  mediaElement: HTMLMediaElement | null,
-  provider: "mux" | "bunny" | null,
-  trimRangeStartSeconds: number,
-  trimRangeEndSeconds: number,
-  onCurrentTimeChange: (seconds: number) => void,
-  onDurationChange: (seconds: number) => void,
-) {
-  useEffect(() => {
-    if (!mediaElement) {
-      return;
-    }
-
-    const clipDurationSeconds = getClipDurationSeconds(
-      trimRangeStartSeconds,
-      trimRangeEndSeconds,
+  if (set === null || (dev && !isLoading && !isAuthenticated)) {
+    return (
+      <main className="mx-auto my-6 max-w-3xl border-tf bg-white p-6 text-center shadow-tf-card">
+        <h1 className="text-2xl font-black uppercase">Set not found</h1>
+        <p className="my-4 text-sm">This Set is unavailable or you don’t have access to it.</p>
+        <Button asChild><Link href="/library">Back to Library</Link></Button>
+      </main>
     );
-    const playbackWindow = getPlaybackWindowForSource(
-      provider,
-      trimRangeStartSeconds,
-      trimRangeEndSeconds,
-    );
-
-    const syncCurrentTime = () => {
-      const clampedSourceTime = clampTime(
-        mediaElement.currentTime,
-        playbackWindow.startSeconds,
-        playbackWindow.endSeconds,
-      );
-
-      if (clampedSourceTime !== mediaElement.currentTime) {
-        mediaElement.currentTime = clampedSourceTime;
-      }
-
-      onCurrentTimeChange(
-        getClipTimeFromSourceTime(
-          clampedSourceTime,
-          provider,
-          trimRangeStartSeconds,
-          trimRangeEndSeconds,
-        ),
-      );
-    };
-
-    const syncDuration = () => {
-      onDurationChange(clipDurationSeconds);
-    };
-
-    const handleLoadedMetadata = () => {
-      mediaElement.currentTime = playbackWindow.startSeconds;
-      syncDuration();
-      syncCurrentTime();
-    };
-
-    const handleTimeUpdate = () => {
-      if (mediaElement.currentTime >= playbackWindow.endSeconds) {
-        mediaElement.currentTime = playbackWindow.startSeconds;
-        void mediaElement.play().catch(() => {
-          mediaElement.pause();
-        });
-      }
-
-      syncCurrentTime();
-    };
-
-    mediaElement.addEventListener("loadedmetadata", handleLoadedMetadata);
-    mediaElement.addEventListener("durationchange", syncDuration);
-    mediaElement.addEventListener("timeupdate", handleTimeUpdate);
-
-    syncDuration();
-    syncCurrentTime();
-
-    return () => {
-      mediaElement.removeEventListener("loadedmetadata", handleLoadedMetadata);
-      mediaElement.removeEventListener("durationchange", syncDuration);
-      mediaElement.removeEventListener("timeupdate", handleTimeUpdate);
-    };
-  }, [
-    mediaElement,
-    onCurrentTimeChange,
-    onDurationChange,
-    provider,
-    trimRangeEndSeconds,
-    trimRangeStartSeconds,
-  ]);
-}
-
-function ReadOnlyTimeline({
-  data,
-  currentTime,
-  onSeek,
-}: {
-  data: SetAnalysisData;
-  currentTime: number;
-  onSeek: (time: number) => void;
-}) {
-  const safeDuration = Math.max(
-    data.totalDuration,
-    data.sentences[data.sentences.length - 1]?.end ?? 0,
-    data.segments[data.segments.length - 1]?.end_time ?? 0,
-    1,
-  );
-  const position = (time: number) =>
-    `${Math.min(100, (time / safeDuration) * 100).toFixed(3)}%`;
-  const width = (startTime: number, endTime: number) =>
-    `${Math.max(((endTime - startTime) / safeDuration) * 100, 0.15).toFixed(3)}%`;
+  }
 
   return (
-    <div className="border-tf bg-white p-2 shadow-tf-card">
-      <div className="mb-1 flex items-center justify-between gap-2 px-0.5 font-mono text-[9px] text-tf-ink-muted">
-        <span>{formatTime(currentTime)}</span>
-        <span className="text-center text-[10px] font-black tracking-tf-ui text-tf-ink">
-          TIMELINE
-        </span>
-        <span>{formatTime(safeDuration)}</span>
-      </div>
-
-      <div
-        className="relative h-8 cursor-crosshair border-tf-subtle bg-tf-paper-alt"
-        onClick={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect();
-          onSeek(((event.clientX - rect.left) / rect.width) * safeDuration);
+    <main className={styles.review} aria-label={dev ? "Set review DEV mode" : "Set review"}>
+      <header className={styles.heading}>
+        <h1 className="min-w-0 break-words text-xl leading-tight font-black uppercase tracking-tf-tight sm:text-3xl">{set?.title}</h1>
+        {set?.isOwner && (
+          <Button ref={editTrigger} type="button" size="sm" variant="outline" className="ml-auto whitespace-normal text-center"
+            aria-haspopup="dialog" disabled={transcriptState !== "ready" || set.breakdown?.editability !== "editable"}
+            onClick={() => {
+              if (!set.breakdown) return;
+              pausePlayback();
+              setEditSnapshot({ breakdown: set.breakdown, lines: savedLines, initialTime: currentTime });
+            }}>
+            Edit transcript/timings
+          </Button>
+        )}
+        {dev && (
+          <div className={styles.devToolbar}>
+            <label className={styles.artifactField}>
+              <strong>DEV artifact</strong>
+              <select value={artifact?.id ?? ""} onChange={(event) => {
+                const id = event.currentTarget.value;
+                const next = artifacts?.find((item) => item.id === id);
+                if (next && !["audio", "video"].includes(artifactType(next))) pausePlayback();
+                setSelection(id);
+              }}>
+                <option value="">Set video</option>
+                {artifacts?.map((item) => <option key={item.id} value={item.id}>
+                  {item.fileName}{item.run !== null ? ` · Run ${item.run}` : ""}{item.isCanonical ? "" : " · Superseded"}
+                </option>)}
+              </select>
+            </label>
+            {artifact?.url && <a className="underline" href={artifact.url} target="_blank" rel="noreferrer">Open file</a>}
+            {artifacts?.length === 0 && <span>No artifacts yet.</span>}
+            <DevCutoffControls cutoff={cutoff} onChange={() => setNavigationTarget(null)} />
+          </div>
+        )}
+      </header>
+      {set?.isOwner && editSnapshot && <SetEditDialog
+        title={set.title} setId={set._id} breakdownId={editSnapshot.breakdown._id} editRevision={editSnapshot.breakdown.editRevision}
+        lines={editSnapshot.lines} source={set.activePlaybackSource} trimStart={set.trimRangeStartSeconds}
+        trimEnd={set.trimRangeEndSeconds} initialTime={editSnapshot.initialTime} trigger={editTrigger}
+        onClose={savedTime => {
+          setEditSnapshot(null);
+          if (savedTime !== undefined) seek(savedTime);
         }}
-      >
-        {data.segments.map((segment) => (
-          <div
-            key={segment.index}
-            className="pointer-events-none absolute bottom-0 top-0"
-            style={{
-              left: position(segment.start_time),
-              width: width(segment.start_time, segment.end_time),
-              background: getIntensityColor(segment.intensity_score),
-            }}
-          />
-        ))}
-        <div
-          className="pointer-events-none absolute bottom-0 top-0 z-20 w-[2px] bg-tf-red"
-          style={{
-            left: position(currentTime),
-            transform: "translateX(-50%)",
-          }}
-        >
-          <div className="absolute -top-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 bg-tf-red" />
-        </div>
-      </div>
-    </div>
-  );
-}
+      />}
 
-function LinePanel({
-  data,
-  currentTime,
-  laughState,
-  onSeek,
-  transcriptState,
-}: {
-  data: SetAnalysisData;
-  currentTime: number;
-  laughState: BreakdownPathState;
-  onSeek: (time: number) => void;
-  transcriptState: BreakdownPathState;
-}) {
-  const [filter, setFilter] = useState<"all" | "laughs">("all");
-  const [sortMode, setSortMode] = useState<"timeline" | "intensity">(
-    "timeline",
-  );
-  const activeSentence = getSelectedLine(data.sentences, currentTime);
-  const visibleSentences = data.sentences.filter((sentence) =>
-    filter === "laughs" ? sentence.laugh_count > 0 : true,
-  );
-  const displaySentences = [...visibleSentences].sort((left, right) => {
-    if (sortMode === "intensity") {
-      if (right.laugh_intensity_score !== left.laugh_intensity_score) {
-        return right.laugh_intensity_score - left.laugh_intensity_score;
-      }
-      if (right.laugh_count !== left.laugh_count) {
-        return right.laugh_count - left.laugh_count;
-      }
-    }
-
-    return left.start - right.start;
-  });
-
-  return (
-    <aside className="flex min-h-0 max-h-[60vh] w-full flex-col border-tf bg-white shadow-tf-card lg:h-full lg:max-h-none">
-      <div className="flex items-center justify-between gap-2 border-b-2 border-tf-ink bg-tf-paper-alt px-2 py-1.5">
-        <div>
-          <div className="text-[11px] font-black uppercase tracking-[0.18em] text-tf-ink">
-            Line Feed
-          </div>
-          <div className="font-mono text-[8px] uppercase tracking-[0.16em] text-tf-ink-muted">
-            {filter === "all" ? "All lines" : "Laugh lines"} /{" "}
-            {sortMode === "timeline" ? "Timeline" : "Intensity"}
-          </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            className={`flex h-8 items-center border border-tf-ink px-2 text-[8px] font-black uppercase tracking-[0.16em] ${
-              filter === "laughs" ? "bg-tf-ink text-white" : "bg-white text-tf-ink"
-            }`}
-            onClick={() =>
-              setFilter((current) => (current === "all" ? "laughs" : "all"))
-            }
-          >
-            {filter === "all" ? "Show Laughs" : "Show All"}
-          </button>
-          <button
-            type="button"
-            className={`flex h-8 items-center border border-tf-ink px-2 text-[8px] font-black uppercase tracking-[0.16em] ${
-              sortMode === "intensity"
-                ? "bg-tf-ink text-white"
-                : "bg-white text-tf-ink"
-            }`}
-            onClick={() =>
-              setSortMode((current) =>
-                current === "timeline" ? "intensity" : "timeline",
-              )
-            }
-          >
-            {sortMode === "timeline" ? "Most Intense" : "Timeline"}
-          </button>
-        </div>
-      </div>
-
-      {laughState !== "ready" ? (
-        <div className="hidden lg:block">
-          <CompactBreakdownStatus
-            transcriptState={transcriptState}
-            laughState={laughState}
-          />
-        </div>
-      ) : null}
-
-      <div className="flex-1 space-y-0.5 overflow-y-auto bg-neutral-50 p-1.5">
-        {displaySentences.length === 0 ? (
-          <div className="border border-dashed border-tf-ink bg-white px-3 py-4 text-center text-[11px] font-mono uppercase tracking-[0.2em] text-tf-ink-muted">
-            No lines available yet.
-          </div>
-        ) : null}
-        {displaySentences.map((sentence, index) => {
-          const color = getIntensityColor(sentence.laugh_intensity_score);
-          const intensityWidth = `${Math.max(
-            sentence.laugh_intensity_score * 100,
-            sentence.laugh_count > 0 ? 4 : 0,
-          )}%`;
-          const isActive = activeSentence?.index === sentence.index;
-          const isPast = currentTime > sentence.end;
-
-          return (
-            <button
-              key={sentence.index}
-              type="button"
-              className={`w-full cursor-pointer border bg-white text-left transition-all duration-100 ${
-                isActive
-                  ? "border-tf-red shadow-tf-active"
-                  : "border-tf-ink hover:bg-tf-paper-alt"
-              } ${isPast && !isActive ? "opacity-65" : ""}`}
-              onClick={() => onSeek(sentence.start)}
-            >
-              <div className="px-2 py-1.5">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <span
-                      className={`h-1.5 w-1.5 flex-shrink-0 ${
-                        isActive ? "animate-pulse" : ""
-                      }`}
-                      style={{
-                        background:
-                          sentence.laugh_count > 0 ? color : "#c7c2bb",
-                      }}
-                    />
-                    <div className="line-clamp-2 min-w-0 text-[11px] leading-4 text-tf-ink">
-                      {sentence.text}
-                    </div>
-                  </div>
-                  <div className="flex flex-shrink-0 items-center gap-1.5 font-mono text-[8px] uppercase tracking-[0.16em] text-tf-ink-muted">
-                    {sortMode === "intensity" ? (
-                      <span className="border border-tf-ink bg-tf-paper px-1 py-0.5 text-tf-ink">
-                        #{index + 1}
-                      </span>
-                    ) : null}
-                    <span>
-                      {sentence.laugh_count} laugh
-                      {sentence.laugh_count === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                </div>
-                <div className="relative mt-1.5 h-3.5 w-full overflow-hidden border border-tf-ink bg-tf-paper-alt">
-                  <div
-                    className="absolute inset-y-0 left-0"
-                    style={{ width: intensityWidth, background: color }}
-                  />
-                  {sentence.laughs.map((laugh) => {
-                    const laughCenter =
-                      ((laugh.start_time + laugh.end_time) / 2 - sentence.start) /
-                      Math.max(sentence.end - sentence.start, 0.01);
-
-                    return (
-                      <span
-                        key={`${sentence.index}-${laugh.index}`}
-                        className="absolute top-0 h-full w-px bg-white/90 mix-blend-screen"
-                        style={{
-                          left: `${Math.min(
-                            100,
-                            Math.max(0, laughCenter * 100),
-                          )}%`,
-                        }}
-                      />
-                    );
-                  })}
-                </div>
-                <div className="mt-1 flex items-center justify-between font-mono text-[8px] uppercase tracking-[0.16em] text-tf-ink-muted">
-                  <span>{formatPreciseTime(sentence.start)}</span>
-                  <span>{formatPreciseTime(sentence.end)}</span>
-                </div>
+      <div className={styles.playbackColumn}>
+        <section className={`${styles.player} border-tf shadow-tf-card`} aria-label="Set player">
+          {showPreview ? <SetArtifactPreview key={artifact.id} setId={setId} artifact={artifact} /> :
+            selectedType === "audio" ? (
+              <div className="grid size-full place-items-center p-3 text-white">
+                <audio ref={attachMedia} preload="auto" />
+                <p className="break-all font-mono text-sm">{artifact?.fileName}</p>
               </div>
-            </button>
-          );
-        })}
-      </div>
-    </aside>
-  );
-}
-
-function TrimmedMediaControls({
-  currentTime,
-  duration,
-  isPlaying,
-  onPlayPause,
-  onSeek,
-}: {
-  currentTime: number;
-  duration: number;
-  isPlaying: boolean;
-  onPlayPause: () => void;
-  onSeek: (time: number) => void;
-}) {
-  const safeDuration = Math.max(duration, 0);
-
-  return (
-    <div className="border-tf border-t bg-white px-3 py-2">
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onPlayPause}
-          className="inline-flex h-10 w-10 items-center justify-center border-2 border-tf-ink bg-tf-paper text-tf-ink transition hover:bg-tf-paper-alt"
-          aria-label={isPlaying ? "Pause playback" : "Play playback"}
-        >
-          {isPlaying ? <Pause className="size-4" /> : <Play className="size-4" />}
-        </button>
-        <div className="min-w-0 flex-1">
-          <input
-            type="range"
-            min={0}
-            max={safeDuration || 0}
-            step={0.01}
-            value={Math.min(currentTime, safeDuration)}
-            onChange={(event) => onSeek(Number(event.currentTarget.value))}
-            className="w-full accent-tf-red"
-            aria-label="Trimmed playback position"
-          />
-          <div className="mt-1 flex items-center justify-between font-mono text-[9px] uppercase tracking-[0.16em] text-tf-ink-muted">
-            <span>{formatTime(currentTime)}</span>
-            <span>{formatTime(safeDuration)}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-export default function SetPageClient({ setId }: { setId: string }) {
-  const set = useQuery(api.sets.getSetPageForViewer, {
-    setId: setId as Id<"sets">,
-  });
-  const retryCalibration = useMutation(api.calibration.retry);
-  const [retryError, setRetryError] = useState<string | null>(null);
-  const [retrying, setRetrying] = useState(false);
-  const mediaRef = useRef<HTMLVideoElement | null>(null);
-  const [mediaElement, setMediaElement] = useState<HTMLVideoElement | null>(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const playbackProvider = set?.activePlaybackSource?.provider ?? null;
-  const trimRangeStartSeconds = set?.trimRangeStartSeconds ?? 0;
-  const trimRangeEndSeconds = set?.trimRangeEndSeconds ?? 0;
-
-  const analysisData = useMemo<SetAnalysisData | null>(
-    () => set?.analysisData ?? null,
-    [set],
-  );
-  const transcriptState: BreakdownPathState = analysisData
-    ? "ready"
-    : getEffectivePathState(
-        set?.breakdown?.lineSeedingState ?? "pending",
-        set?.ingestJobStatus ?? null,
-      );
-  const laughState = getEffectivePathState(
-    set?.breakdown?.laughSeedingState ?? "pending",
-    set?.ingestJobStatus ?? null,
-  );
-  const showBreakdownStatus =
-    transcriptState !== "ready" || laughState !== "ready";
-  const laughLines = useMemo(
-    () =>
-      analysisData?.sentences.filter((sentence) => sentence.laugh_count > 0) ?? [],
-    [analysisData],
-  );
-  const activeLine = useMemo(
-    () =>
-      analysisData ? getSelectedLine(analysisData.sentences, currentTime) : null,
-    [analysisData, currentTime],
-  );
-  const activeLaugh = useMemo(() => {
-    if (!analysisData) {
-      return null;
-    }
-
-    return analysisData.segments.reduce<
-      SetAnalysisData["segments"][number] | null
-    >((active, segment) => {
-      if (currentTime < segment.start_time || currentTime > segment.end_time) {
-        return active;
-      }
-
-      if (!active || segment.intensity_score > active.intensity_score) {
-        return segment;
-      }
-
-      return active;
-    }, null);
-  }, [analysisData, currentTime]);
-
-  useHlsPlayback(
-    mediaElement,
-    set?.activePlaybackSource?.playbackUrl ?? null,
-    (set?.activePlaybackSource?.playbackMode ?? "hls") as "direct" | "hls",
-  );
-  useTrimmedPlaybackWindow(
-    mediaElement,
-    playbackProvider,
-    trimRangeStartSeconds,
-    trimRangeEndSeconds,
-    setCurrentTime,
-    setDuration,
-  );
-
-  useEffect(() => {
-    if (!mediaElement) {
-      return;
-    }
-
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
-    const handleEnded = () => setIsPlaying(false);
-
-    mediaElement.addEventListener("play", handlePlay);
-    mediaElement.addEventListener("pause", handlePause);
-    mediaElement.addEventListener("ended", handleEnded);
-    setIsPlaying(!mediaElement.paused);
-
-    return () => {
-      mediaElement.removeEventListener("play", handlePlay);
-      mediaElement.removeEventListener("pause", handlePause);
-      mediaElement.removeEventListener("ended", handleEnded);
-    };
-  }, [mediaElement]);
-
-  function seekToClipTime(time: number) {
-    if (!mediaRef.current) {
-      return;
-    }
-
-    mediaRef.current.currentTime = getSourceTimeFromClipTime(
-      time,
-      playbackProvider,
-      trimRangeStartSeconds,
-      trimRangeEndSeconds,
-    );
-  }
-
-  function togglePlayback() {
-    if (!mediaRef.current) {
-      return;
-    }
-
-    if (mediaRef.current.paused) {
-      void mediaRef.current.play().catch(() => null);
-      return;
-    }
-
-    mediaRef.current.pause();
-  }
-
-  if (set === undefined) {
-    return (
-      <main className="min-h-[calc(100vh-4.5rem)] bg-tf-paper px-4 py-5 text-tf-ink md:px-6">
-        <div className="mx-auto flex min-h-[50vh] max-w-7xl items-center justify-center">
-          <LoaderCircle className="size-8 animate-spin text-tf-ink" />
-        </div>
-      </main>
-    );
-  }
-
-  if (set === null) {
-    return (
-      <main className="min-h-[calc(100vh-4.5rem)] bg-tf-paper px-4 py-5 text-tf-ink md:px-6">
-        <div className="mx-auto max-w-4xl border-tf bg-white p-8 text-center shadow-tf-card">
-          <h1 className="text-3xl font-black uppercase tracking-tight">
-            Set Not Found
-          </h1>
-          <p className="mt-3 text-sm text-tf-ink-soft">
-            This Set is unavailable or you do not have access to it.
-          </p>
-          <div className="mt-6">
-            <Button asChild>
-              <Link href="/library">Back To Library</Link>
-            </Button>
-          </div>
-        </div>
-      </main>
-    );
-  }
-
-  return (
-    <main className="min-h-[calc(100vh-4.5rem)] bg-tf-paper px-4 py-5 text-tf-ink md:px-6">
-      <div className="mx-auto flex max-w-7xl flex-col gap-4">
-        <section className="border-tf bg-white shadow-tf-card">
-          <div className="border-b-2 border-tf-ink bg-tf-paper-alt p-4">
-            <div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-tf-ink-muted">
-                Set Review
-              </p>
-              <h1 className="mt-2 text-3xl font-black uppercase tracking-tight md:text-5xl">
-                {set.title}
-              </h1>
-            </div>
-          </div>
-
-          <div className="p-4">
-            <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-3 lg:gap-4">
-              <div className="flex min-h-0 flex-col gap-3 lg:col-span-2">
-                <div className="relative overflow-hidden border-tf bg-black shadow-tf-card">
-                  {set.activePlaybackSource ? (
-                    <>
-                        <video
-                          ref={(node) => {
-                            mediaRef.current = node;
-                            setMediaElement(node);
-                          }}
-                          playsInline
-                          preload="metadata"
-                          className="aspect-video w-full bg-black"
-                          onClick={togglePlayback}
-                        />
-                        {activeLine ? (
-                          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/55 to-transparent px-5 pb-6 pt-10">
-                            <div className="mx-auto max-w-4xl text-center">
-                              <div className="text-[9px] font-mono uppercase tracking-[0.2em] text-white/60">
-                                {formatPreciseTime(activeLine.start)} -{" "}
-                                {formatPreciseTime(activeLine.end)}
-                              </div>
-                              <div className="mt-2 text-lg font-black uppercase leading-tight tracking-[0.04em] text-white sm:text-2xl">
-                                {activeLine.text}
-                              </div>
-                            </div>
-                          </div>
-                        ) : null}
-                        {activeLaugh ? (
-                          <div
-                            className="pointer-events-none absolute right-3 top-3 z-10 border-2 border-white/20 px-3 py-1.5"
-                            style={{
-                              background: getIntensityColor(
-                                activeLaugh.intensity_score,
-                              ),
-                            }}
-                          >
-                            <span className="text-[10px] font-black uppercase tracking-widest text-white">
-                              Laughing
-                            </span>
-                          </div>
-                        ) : null}
-                        <div className="absolute inset-x-0 bottom-0 z-20">
-                          <TrimmedMediaControls
-                            currentTime={currentTime}
-                            duration={duration}
-                            isPlaying={isPlaying}
-                            onPlayPause={togglePlayback}
-                            onSeek={seekToClipTime}
-                          />
-                        </div>
-                    </>
-                  ) : (
-                    <div className="flex aspect-video items-center justify-center bg-tf-paper-alt px-6 text-center">
-                      <div>
-                        <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-tf-ink-muted">
-                          Playback Pending
-                        </p>
-                        <p className="mt-2 text-sm text-tf-ink-soft">
-                          The Set stays visible while playback is being prepared.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {set.calibrationRetryable && <div className="border-2 border-tf-ink bg-tf-paper p-3 text-sm">
-                  <button disabled={retrying} className="font-bold underline" onClick={() => {
-                    setRetrying(true); setRetryError(null);
-                    void retryCalibration({ setId: set._id }).catch(() => setRetryError("Processing could not restart. Try again.")).finally(() => setRetrying(false));
-                  }}>{retrying ? "Restarting…" : "Retry calibration processing"}</button>
-                  {retryError && <p role="alert">{retryError}</p>}
-                </div>}
-                {showBreakdownStatus ? (
-                  <div className="lg:hidden">
-                    {analysisData ? (
-                      <div className="border-tf bg-white shadow-tf-card">
-                        <CompactBreakdownStatus
-                          transcriptState={transcriptState}
-                          laughState={laughState}
-                        />
-                        <p className="px-2.5 py-2 font-mono text-[9px] leading-4 text-tf-ink-muted">
-                          You can leave this page—processing will continue.
-                        </p>
-                      </div>
-                    ) : (
-                      <BreakdownStatusPanel
-                        transcriptState={transcriptState}
-                        laughState={laughState}
-                      />
-                    )}
-                  </div>
-                ) : null}
-
-                {analysisData ? (
-                  <>
-                    <ReadOnlyTimeline
-                      data={analysisData}
-                      currentTime={currentTime}
-                      onSeek={(time) => {
-                        if (!mediaRef.current) {
-                          return;
-                        }
-                        seekToClipTime(time);
-                        void mediaRef.current.play().catch(() => null);
-                      }}
-                    />
-
-                    <div className="flex flex-col gap-2 sm:flex-row">
-                      <Button
-                        variant="outline"
-                        disabled={laughLines.length === 0}
-                        onClick={() => {
-                          const target =
-                            laughLines
-                              .filter((sentence) => sentence.start < currentTime - 1)
-                              .at(-1) ?? laughLines[0];
-                          if (!target || !mediaRef.current) {
-                            return;
-                          }
-                          seekToClipTime(target.start);
-                          void mediaRef.current.play().catch(() => null);
-                        }}
-                        className="w-full"
-                      >
-                        Prev Laugh Line
-                      </Button>
-                      <Button
-                        variant="outline"
-                        disabled={laughLines.length === 0}
-                        onClick={() => {
-                          const target =
-                            laughLines.find(
-                              (sentence) => sentence.start > currentTime + 0.001,
-                            ) ?? laughLines[laughLines.length - 1];
-                          if (!target || !mediaRef.current) {
-                            return;
-                          }
-                          seekToClipTime(target.start);
-                          void mediaRef.current.play().catch(() => null);
-                        }}
-                        className="w-full"
-                      >
-                        Next Laugh Line
-                      </Button>
-                    </div>
-                  </>
-                ) : transcriptState === "failed" ? (
-                  <div className="border-tf bg-white p-4 shadow-tf-card">
-                    <div className="flex items-start gap-3">
-                      <TriangleAlert
-                        className="mt-0.5 size-5 shrink-0 text-tf-red"
-                        aria-hidden="true"
-                      />
-                      <div>
-                        <h2 className="text-sm font-black uppercase tracking-[0.12em] text-tf-ink">
-                          Breakdown unavailable
-                        </h2>
-                        <p className="mt-2 text-sm leading-6 text-tf-ink-soft">
-                          We couldn&apos;t prepare the transcript for this Set.
-                          Playback is still available above.
-                        </p>
-                        <Button asChild variant="outline" className="mt-4">
-                          <Link href="/library">Back To Library</Link>
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                ) : transcriptState === "ready" ? (
-                  <div className="border-tf bg-white p-4 shadow-tf-card">
-                    <h2 className="text-sm font-black uppercase tracking-[0.12em] text-tf-ink">
-                      No transcript lines found
-                    </h2>
-                    <p className="mt-2 text-sm leading-6 text-tf-ink-soft">
-                      The transcript finished, but there were no spoken lines in
-                      this Set. Playback is still available above.
-                    </p>
-                  </div>
-                ) : (
-                  <BreakdownTimelineSkeleton />
-                )}
-              </div>
-
-              {analysisData ? (
-                <LinePanel
-                  data={{
-                    ...analysisData,
-                    totalDuration: Math.max(
-                      analysisData.totalDuration,
-                      duration,
-                    ),
-                  }}
-                  currentTime={currentTime}
-                  transcriptState={transcriptState}
-                  laughState={laughState}
-                  onSeek={(time) => {
-                    if (!mediaRef.current) {
-                      return;
-                    }
-                    seekToClipTime(time);
-                    void mediaRef.current.play().catch(() => null);
-                  }}
-                />
-              ) : showBreakdownStatus ? (
-                <BreakdownStatusPanel
-                  className="hidden lg:flex lg:h-full"
-                  transcriptState={transcriptState}
-                  laughState={laughState}
-                />
-              ) : (
-                <aside className="hidden border-tf bg-white p-4 shadow-tf-card lg:block">
-                  <p className="font-mono text-[9px] uppercase tracking-[0.2em] text-tf-ink-muted">
-                    Breakdown Status
-                  </p>
-                  <p className="mt-2 text-sm font-black uppercase tracking-[0.08em] text-tf-ink">
-                    Processing complete
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-tf-ink-soft">
-                    No transcript lines were found for this Set.
-                  </p>
-                </aside>
+            ) : <video ref={attachMedia} playsInline preload="auto" onClick={togglePlayback} className="size-full object-contain" />}
+          {!showPreview && isLaughing && status !== "error" && (
+            <span className="pointer-events-none absolute top-3 right-3 border-2 border-white/30 bg-tf-red px-2 py-1 text-[10px] font-black uppercase tracking-widest text-white">
+              Laughing
+            </span>
+          )}
+          {!showPreview && playerMessage && (
+            <div className={status === "buffering" ? styles.buffering : styles.playerMessage}>
+              <p role="status" className="bg-tf-paper px-3 py-2 font-mono text-xs text-tf-ink">{playerMessage}</p>
+              {status === "error" && (
+                <Button size="sm" type="button" onClick={retryPlayback}>Retry playback</Button>
               )}
             </div>
+          )}
+        </section>
+
+        <section className={`${styles.transport} border-tf bg-white shadow-tf-card`} aria-label="Playback controls">
+          <Button size="icon" type="button" disabled={!canSeek} onClick={togglePlayback}
+            aria-label={playing ? "Pause" : "Play"}>
+            {playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
+          </Button>
+          <span className="whitespace-nowrap font-mono text-[10px]">{formatTime(currentTime)} / {formatTime(duration)}</span>
+          <div className={styles.timeline}>
+            <div className={styles.timelineTrack} aria-hidden="true">
+              {duration > 0 && timelineLaughs.map((laugh) => (
+                <span key={laugh.index} className="absolute inset-y-0 min-w-px" style={{
+                  left: `${100 * laugh.start_time / duration}%`,
+                  width: `${100 * laugh.duration / duration}%`,
+                  background: intensityColor(laugh.intensity_score),
+                }} />
+              ))}
+            </div>
+            <div className={styles.playheadRail} aria-hidden="true">
+              <span className={styles.playhead}
+                style={{ left: `${duration ? 100 * currentTime / duration : 0}%` }} />
+            </div>
+            <input aria-label="Set timeline" aria-valuetext={formatTime(currentTime)} type="range"
+              min={0} max={duration} step="any" value={currentTime} disabled={!canSeek}
+              onChange={(event) => seek(event.currentTarget.valueAsNumber)} />
+          </div>
+        </section>
+      </div>
+
+      <div className={styles.transcriptColumn}>
+        <section className={`${styles.transcript} border-tf bg-white shadow-tf-card`} aria-labelledby="transcript-heading">
+          <header className="border-b-2 border-tf-ink bg-tf-paper-alt p-2">
+            <h2 id="transcript-heading" className="mb-1 text-xs font-black uppercase tracking-tf-ui">Transcript</h2>
+            <div className="flex flex-wrap gap-1.5">
+              <Button size="sm" className="h-7 px-2 tracking-normal" type="button" aria-pressed={follow}
+                variant={follow ? "default" : "outline"} onClick={() => setFollow(!follow)}>Follow playback</Button>
+              <Button size="sm" className="h-7 px-2 tracking-normal" type="button" aria-pressed={rankedView}
+                variant={rankedView ? "default" : "outline"} disabled={!laughs.length} onClick={() => setStrongest(!rankedView)}>
+                Strongest first
+              </Button>
+            </div>
+          </header>
+          <div className={styles.lines} ref={scrollPane} data-follow={follow}
+            onWheel={() => setFollow(false)} onTouchMove={() => setFollow(false)}
+            onScroll={(event) => {
+              if (Math.abs(event.currentTarget.scrollTop - expectedScroll.current) > 1) setFollow(false);
+            }}>
+            {(!lines.length || transcriptState !== "ready") && <p role="status" className="p-3 font-mono text-xs text-tf-ink-soft">{transcriptMessage}</p>}
+            {(rankedView ? ranked : lines).map((line, index) => {
+              const hasLaugh = line.laughs.length > 0;
+              const intensity = Math.round(100 * Math.min(1, Math.max(0, line.laugh_intensity_score)));
+              const active = hasPlayedSource && line.index === activeLine?.index;
+              return (
+                <button key={line.index} className={styles.line} type="button" disabled={!canSeek}
+                  ref={line.index === activeLine?.index ? activeRow : undefined} aria-current={active ? "true" : undefined}
+                  onClick={() => seek(line.start)}>
+                  <span className="flex gap-2">
+                    {rankedView && hasLaugh && <span className="shrink-0 font-mono text-[10px] font-bold text-tf-red">#{index + 1}</span>}
+                    <span>{line.text}</span>
+                  </span>
+                  {hasLaugh && (
+                    <span className="mt-1 block h-[7px] bg-tf-paper-alt" role="img" aria-label={`Laugh intensity ${intensity}%`}>
+                      <span className="block h-full min-w-px bg-tf-red" style={{ width: `${intensity}%` }} />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className={`${styles.laughNavigation} border-tf bg-white px-2 pt-1 pb-2 shadow-tf-card`} aria-label="Laugh navigation">
+          <p role="status" className="flex min-h-7 items-center font-mono text-[10px] leading-tight text-tf-ink-soft">{laughMessage}</p>
+          <div className="grid grid-cols-2 gap-2">
+            <Button size="sm" type="button" variant="outline" className="min-w-0 gap-1 px-1 tracking-normal"
+              disabled={!canSeek || !previous} onClick={() => jump(previous)}>
+              <ArrowLeft aria-hidden="true" /> Previous laugh
+            </Button>
+            <Button size="sm" type="button" variant="outline" className="min-w-0 gap-1 px-1 tracking-normal"
+              disabled={!canSeek || !next} onClick={() => jump(next)}>
+              Next laugh <ArrowRight aria-hidden="true" />
+            </Button>
           </div>
         </section>
       </div>

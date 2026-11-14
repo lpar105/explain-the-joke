@@ -8,7 +8,6 @@ import { Suspense, useMemo, useState } from 'react'
 import CalibrationPrototype from '../../components/library/calibration-prototype'
 
 import { api } from '../../convex/_generated/api'
-import type { Id } from '../../convex/_generated/dataModel'
 import { getAppErrorCodeFromConvexError, getErrorMessageForCode } from '../../lib/errors'
 import UploadSetDialog from '../../components/library/upload-set-dialog'
 import { Button } from '../../components/ui/button'
@@ -22,32 +21,12 @@ import {
 } from '../../components/ui/dialog'
 import { Input } from '../../components/ui/input'
 import {
-  formatCreationDate,
   formatDuration,
+  formatSetDate,
+  getSetDateInputValue,
 } from '../../lib/set-status'
 
-type LibrarySet = {
-  _id: Id<'sets'>
-  _creationTime: number
-  currentBreakdownId: Id<'breakdowns'> | null
-  setStatus: 'playbackPending' | 'playable' | 'unavailable'
-  title: string
-  trimRangeEndSeconds: number
-  trimRangeStartSeconds: number
-  thumbnailUrl: string | null
-  activePlaybackSource: {
-    _id: Id<'playbackSources'>
-    kind: 'temporary' | 'persistent'
-    playbackId: string
-    provider: 'mux' | 'bunny'
-  } | null
-  breakdown: {
-    _id: Id<'breakdowns'>
-    editability: 'locked' | 'editable'
-    laughSeedingState: 'pending' | 'running' | 'retrying' | 'ready' | 'failed'
-    lineSeedingState: 'pending' | 'running' | 'retrying' | 'ready' | 'failed'
-  } | null
-}
+type LibrarySet = NonNullable<ReturnType<typeof useQuery<typeof api.sets.listForViewer>>>[number]
 
 export default function LibraryPage() {
   return (
@@ -102,7 +81,7 @@ export default function LibraryPage() {
 }
 
 function LibraryGrid() {
-  const sets = useQuery(api.sets.listForViewer, {}) as LibrarySet[] | undefined
+  const sets = useQuery(api.sets.listForViewer, {})
   const [editingSetId, setEditingSetId] = useState<string | null>(null)
   const [statusMessage, setStatusMessage] = useState<string | null>(null)
 
@@ -196,7 +175,7 @@ function LibrarySetCard({
                 {set.title}
               </h2>
               <p className="text-[11px] font-medium text-[#6d675f]">
-                {formatCreationDate(set._creationTime)} / {formatDuration(retainedDuration)}
+                {formatSetDate(set.performanceDate, set._creationTime)} / {formatDuration(retainedDuration)}
               </p>
             </div>
           </div>
@@ -263,21 +242,26 @@ function ManageSetDialog({
   onDeleted,
   onOpenChange,
 }: {
-  set: NonNullable<ReturnType<typeof useQuery<typeof api.sets.listForViewer>>>[number] | null
+  set: LibrarySet | null
   onDeleted: () => void
   onOpenChange: (open: boolean) => void
 }) {
-  const renameSet = useMutation(api.sets.rename)
+  const updateSetDetails = useMutation(api.sets.updateDetails)
   const deleteSet = useMutation(api.setDeletion.requestDeletion)
-  const [draftTitle, setDraftTitle] = useState(() => set?.title ?? '')
+  const [draftTitle, setDraftTitle] = useState<string | null>(null)
+  const [draftDate, setDraftDate] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const currentDate = set ? getSetDateInputValue(set.performanceDate, set._creationTime) : ''
+  const titleChanged = draftTitle !== null && draftTitle !== set?.title
+  const dateChanged = draftDate !== null && draftDate !== currentDate
+  const canSave = (titleChanged || dateChanged) && !isSaving && !isDeleting
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    if (!set) {
+    if (!set || !canSave) {
       return
     }
 
@@ -285,9 +269,10 @@ function ManageSetDialog({
     setErrorMessage(null)
 
     try {
-      await renameSet({
+      await updateSetDetails({
         setId: set._id,
-        title: draftTitle,
+        ...(titleChanged ? { title: draftTitle } : {}),
+        ...(dateChanged ? { performanceDate: draftDate } : {}),
       })
       onOpenChange(false)
     } catch (error) {
@@ -332,7 +317,7 @@ function ManageSetDialog({
         <DialogHeader>
           <DialogTitle>Manage Set</DialogTitle>
           <DialogDescription className="sr-only">
-            Rename this Set or review the available management actions.
+            Edit this Set’s title or performance date, or delete it.
           </DialogDescription>
         </DialogHeader>
 
@@ -343,9 +328,23 @@ function ManageSetDialog({
                 Set Title
               </span>
               <Input
-                value={draftTitle}
+                value={draftTitle ?? set.title}
                 onChange={(event) => setDraftTitle(event.target.value)}
                 placeholder="Untitled Set"
+                disabled={isSaving || isDeleting}
+              />
+            </label>
+
+            <label className="grid gap-2">
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#1a1a1a]">
+                Performance Date
+              </span>
+              <Input
+                type="date"
+                value={draftDate ?? currentDate}
+                onChange={(event) => setDraftDate(event.target.value)}
+                max="9999-12-31"
+                required
                 disabled={isSaving || isDeleting}
               />
             </label>
@@ -360,9 +359,9 @@ function ManageSetDialog({
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving || isDeleting}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isSaving || isDeleting}>
+              <Button type="submit" disabled={!canSave}>
                 {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
-                Save Title
+                Save Changes
               </Button>
             </DialogFooter>
 

@@ -125,6 +125,7 @@ export default defineSchema({
   sets: defineTable({
     ownerTokenIdentifier: v.string(),
     title: v.string(),
+    performanceDate: v.optional(v.string()),
     trimRangeStartSeconds: v.number(),
     trimRangeEndSeconds: v.number(),
     setStatus: setStatusValidator,
@@ -144,6 +145,9 @@ export default defineSchema({
     lineSeededAt: v.optional(v.number()),
     laughSeededAt: v.optional(v.number()),
     editableAt: v.optional(v.number()),
+    spokenLinesMigrated: v.optional(v.boolean()),
+    editRevision: v.optional(v.number()),
+    laughsEdited: v.optional(v.boolean()),
   }).index("by_setId", ["setId"]),
   lines: defineTable({
     breakdownId: v.id("breakdowns"),

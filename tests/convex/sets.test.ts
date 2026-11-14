@@ -1,8 +1,22 @@
 import { ConvexError } from "convex/values";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api, internal } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 import { createConvexTest } from "./test.setup";
+
+// Viewer and playback tests start from an already saved Set.
+async function markCalibrationSaved(
+  t: ReturnType<typeof createConvexTest>,
+  uploadSessionId: Id<"uploadSessions">,
+  setId: Id<"sets">,
+) {
+  await t.run(async ctx => {
+    await ctx.db.patch(setId, { provisional: false });
+    await ctx.db.patch(uploadSessionId, { status: "confirmed" });
+  });
+}
+
 
 async function expectMutationToFailWithCode(
   operation: Promise<unknown>,
@@ -20,6 +34,9 @@ async function expectMutationToFailWithCode(
 }
 
 describe("sets", () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
+  afterEach(() => vi.useRealTimers());
+
   it("confirms a ready upload session into one set, one breakdown, and one active temporary playback source", async () => {
     const t = createConvexTest();
     const asOwner = t.withIdentity({
@@ -57,6 +74,29 @@ describe("sets", () => {
       muxAssetId: "asset_123",
       muxPlaybackId: "playback_123",
     });
+    expect(created.needsCalibration).toBe(true);
+    expect(await asOwner.query(api.sets.listForViewer)).toEqual([]);
+    expect(await asOwner.query(api.sets.getUploadSessionForViewer, { uploadSessionId })).toMatchObject({
+      status: "calibrating",
+    });
+
+    await t.run(async ctx => {
+      await ctx.db.insert("ingestArtifacts", {
+        ingestJobId: created.ingestJobId,
+        stepName: "prepareRetainedMedia",
+        kind: "retainedMedia",
+        isCanonical: true,
+        fileName: "retained.wav",
+        path: "late-show/retained.wav",
+      });
+    });
+    await expect(asOwner.action(api.calibration.confirm, {
+      uploadSessionId, sampleStart: 120, intervals: [{ start: 119, end: 121 }],
+    })).rejects.toThrow("inside the calibration sample");
+    await expect(asOwner.action(api.calibration.confirm, {
+      uploadSessionId, sampleStart: 120, intervals: [{ start: 121, end: 123 }],
+    })).resolves.toEqual({ setId: created.setId });
+
 
     const sets = await asOwner.query(api.sets.listForViewer);
 
@@ -121,6 +161,8 @@ describe("sets", () => {
       muxPlaybackId: "playback_failed_ingest",
     });
 
+    await markCalibrationSaved(t, uploadSessionId, created.setId);
+
     await t.run(async (ctx) => {
       await ctx.db.patch("ingestJobs", created.ingestJobId, {
         failedAt: Date.now(),
@@ -183,6 +225,8 @@ describe("sets", () => {
       muxPlaybackId: "playback_999",
     });
 
+    await markCalibrationSaved(t, uploadSessionId, created.setId);
+
     await asOwner.mutation(api.sets.rename, {
       setId: created.setId,
       title: "  Tight Five  ",
@@ -197,6 +241,9 @@ describe("sets", () => {
 
     expect(visibleToOwner?.title).toBe("Tight Five");
     expect(visibleToOtherViewer).toBeNull();
+    expect(await asOwner.query(api.sets.getSetPageForViewer, { setId: created.setId })).toMatchObject({ isOwner: true });
+    expect(await asOtherViewer.query(api.sets.getSetPageForViewer, { setId: created.setId })).toBeNull();
+    expect(await asOwner.query(api.sets.getSetPageForViewer, { setId: "invalid" })).toBeNull();
     await expectMutationToFailWithCode(
       asOtherViewer.mutation(api.sets.rename, {
         setId: created.setId,
@@ -204,6 +251,56 @@ describe("sets", () => {
       }),
       "not_found",
     );
+  });
+
+  it("updates the library performance date and validates date edits atomically", async () => {
+    const t = createConvexTest();
+    const ownerTokenIdentifier = "clerk:set_owner";
+    const asOwner = t.withIdentity({
+      issuer: "https://clerk.dev",
+      subject: "set_owner",
+      tokenIdentifier: ownerTokenIdentifier,
+    });
+    const asOtherViewer = t.withIdentity({
+      issuer: "https://clerk.dev",
+      subject: "other_viewer",
+      tokenIdentifier: "clerk:other_viewer",
+    });
+    const setId = await t.run((ctx) => ctx.db.insert("sets", {
+      ownerTokenIdentifier,
+      title: "Late Show",
+      trimRangeStartSeconds: 0,
+      trimRangeEndSeconds: 60,
+      setStatus: "playable",
+    }));
+
+    const [original] = await asOwner.query(api.sets.listForViewer);
+    expect(original.performanceDate).toBeNull();
+
+    await asOwner.mutation(api.sets.updateDetails, {
+      setId,
+      performanceDate: "2024-02-29",
+    });
+
+    await expectMutationToFailWithCode(
+      asOwner.mutation(api.sets.updateDetails, {
+        setId,
+        title: "Should stay unchanged",
+        performanceDate: "2025-02-29",
+      }),
+      "validation",
+    );
+    await expectMutationToFailWithCode(
+      asOtherViewer.mutation(api.sets.updateDetails, {
+        setId,
+        performanceDate: "2025-03-01",
+      }),
+      "not_found",
+    );
+
+    expect(await asOwner.query(api.sets.listForViewer)).toEqual([
+      { ...original, performanceDate: "2024-02-29" },
+    ]);
   });
 
   it("rejects invalid trim ranges without creating partial set state and leaves the upload session reusable", async () => {
@@ -258,8 +355,8 @@ describe("sets", () => {
       muxPlaybackId: "playback_bad_trim",
     });
 
-    expect(created.setId).toBeTruthy();
-    expect(await asOwner.query(api.sets.listForViewer)).toHaveLength(1);
+    expect(created.needsCalibration).toBe(true);
+    expect(await asOwner.query(api.sets.listForViewer)).toHaveLength(0);
   });
 
   it("prevents duplicate sets from the same upload session", async () => {
@@ -560,6 +657,8 @@ describe("sets", () => {
       muxPlaybackId: "playback_analysis",
     });
 
+    await markCalibrationSaved(t, uploadSessionId, created.setId);
+
     await t.mutation(internal.setIngest.replaceNormalizedLines, {
       breakdownId: created.breakdownId,
       lines: [
@@ -681,6 +780,8 @@ describe("sets", () => {
         muxAssetId: "asset_bunny_swap",
         muxPlaybackId: "playback_bunny_swap",
       });
+
+      await markCalibrationSaved(t, uploadSessionId, created.setId);
 
       await t.mutation(internal.setIngest.registerArtifactMetadata, {
         contentType: "video/mp4",
@@ -880,6 +981,8 @@ describe("sets", () => {
       muxPlaybackId: "playback_unlock",
     });
 
+    await markCalibrationSaved(t, uploadSessionId, created.setId);
+
     await t.mutation(internal.setIngest.setBreakdownPathState, {
       breakdownId: created.breakdownId,
       path: "line",
@@ -903,6 +1006,55 @@ describe("sets", () => {
       laughSeedingState: "failed",
       laughFailureCode: "laugh_normalization_failed",
     });
+  });
+
+  it("lists current and historical DEV artifacts only for the verified set owner", async () => {
+    const t = createConvexTest();
+    const identity = {
+      email: "laurenparkernz@gmail.com",
+      emailVerified: true,
+      subject: "lauren",
+      tokenIdentifier: "clerk:lauren",
+    };
+    const owner = t.withIdentity(identity);
+    const setId = await t.run(async (ctx) => {
+      const setId = await ctx.db.insert("sets", {
+        ownerTokenIdentifier: identity.tokenIdentifier,
+        title: "DEV Set",
+        setStatus: "playable",
+        trimRangeStartSeconds: 10,
+        trimRangeEndSeconds: 100,
+      });
+      const breakdownId = await ctx.db.insert("breakdowns", {
+        setId, lineSeedingState: "ready", laughSeedingState: "ready", editability: "editable",
+      });
+      await ctx.db.patch(setId, { currentBreakdownId: breakdownId });
+      const ingestJobId = await ctx.db.insert("ingestJobs", { setId, breakdownId, status: "completed" });
+      for (const isCanonical of [false, true]) {
+        await ctx.db.insert("ingestArtifacts", {
+          ingestJobId, kind: "cleanedAudio", stepName: "preprocessLaughAudio",
+          path: `sets/${isCanonical ? "current" : "superseded"}/cleaned-audio.wav`,
+          fileName: "cleaned-audio.wav", contentType: "audio/wav", isCanonical,
+        });
+      }
+      return setId;
+    });
+    const args = { setId };
+
+    expect(await owner.query(api.sets.listDevArtifacts, args)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "cleanedAudio", isCanonical: true, isCurrentBreakdown: true,
+        url: expect.stringContaining("/current/cleaned-audio.wav") }),
+      expect.objectContaining({ kind: "cleanedAudio", isCanonical: false,
+        url: expect.stringContaining("/superseded/cleaned-audio.wav") }),
+    ]));
+    expect(await t.query(api.sets.listDevArtifacts, args)).toBeNull();
+    for (const otherIdentity of [
+      { ...identity, email: "other@example.com" },
+      { ...identity, emailVerified: false },
+      { ...identity, subject: "other", tokenIdentifier: "clerk:other" },
+    ]) {
+      expect(await t.withIdentity(otherIdentity).query(api.sets.listDevArtifacts, args)).toBeNull();
+    }
   });
 
   it("exposes the dev pipeline dashboard only to the allowed Clerk email", async () => {
@@ -963,7 +1115,7 @@ describe("sets", () => {
         {
           _id: uploadSessionId,
           confirmedSetId: created.setId,
-          status: "confirmed",
+          status: "calibrating",
         },
       ],
       sets: [
@@ -987,7 +1139,7 @@ describe("sets", () => {
           title: "Dev Dashboard",
           uploadSession: {
             _id: uploadSessionId,
-            status: "confirmed",
+            status: "calibrating",
           },
         },
       ],

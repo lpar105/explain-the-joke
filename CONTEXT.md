@@ -13,11 +13,11 @@ The current editable analysis artifact for a set.
 _Avoid_: Revision, pass, version, report
 
 **Line**:
-A readable timed unit in the breakdown transcript that the comic can review, click, and edit in sync with playback.
+A timed unit in the Breakdown transcript that contains at least one spoken word and that the comic can review, click, and edit in sync with playback. A Line can own at most one Laugh Region.
 _Avoid_: Sentence, utterance
 
 **Laugh Region**:
-A timed audience-laughter event owned by the line during which the laugh begins.
+A timed audience-laughter event owned by the Line active at its start. Consecutive laughs without intervening transcript words form one Laugh Region.
 _Avoid_: Reaction, laugh marker, applause block
 
 **Calibration Sample**:
@@ -97,7 +97,8 @@ _Avoid_: Trial grace window, billing retry
 - A **Set** has at most one active **Playback Source**
 - A **Set** has exactly one current **Set Status**
 - A **Laugh Region** belongs to exactly one **Line**
-- **Lines** form one continuous active track across the playable timeline of a **Set**
+- When a **Set** has spoken words, its **Lines** form one continuous active track across the playable timeline
+- A **Set** without spoken words has no **Lines** or **Laugh Regions**
 - A **Set** can be defined by one upload-time **Trim Range**
 - The retained media for a **Set** is the trimmed media chosen during upload
 - A **Set** can have zero or more **Metadata Fields**
@@ -239,7 +240,7 @@ _Avoid_: Trial grace window, billing retry
 > **Domain expert:** "No; a **Bit** comes into existence from real performed **Chapters**, not as a standalone idea with no set history."
 >
 > **Dev:** "What happens during silence between spoken moments?"
-> **Domain expert:** "The previous **Line** remains active, so the line track stays continuous even when the performer pauses."
+> **Domain expert:** "The current **Line** remains active until the next **Line** starts. Consecutive laughs with no spoken words between them form one **Laugh Region**. A **Set** with no spoken words has no **Laugh Regions**."
 >
 > **Dev:** "Who can make a **Comment Thread** private?"
 > **Domain expert:** "Only the comedian who owns the **Set** can switch a **Comment Thread** between shared and private visibility."

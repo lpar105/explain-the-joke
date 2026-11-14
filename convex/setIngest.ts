@@ -1,11 +1,14 @@
 import type { WorkflowCtx, WorkflowId } from "@convex-dev/workflow";
 import { sendEvent, start } from "@convex-dev/workflow";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
+
+import { joinWords, splitLinesForLaughs, type AcceptedLaugh, type TimedWord } from "../lib/breakdown-lines";
 
 import { normalizeLaughRegionsAfterLines } from "../lib/set-ingest-orchestration";
 import { components, internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
-import type { MutationCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { ActionCtx, MutationCtx } from "./_generated/server";
 import {
   internalAction,
   internalMutation,
@@ -203,40 +206,6 @@ async function deleteMuxAssetFromTemporaryPlayback(assetId: string) {
   }
 }
 
-function joinWords(words: string[]) {
-  let result = "";
-
-  for (const word of words) {
-    if (!word) {
-      continue;
-    }
-
-    if (/^[,.;!?)]/.test(word)) {
-      result += word;
-    } else if (result.endsWith("(") || result.length === 0) {
-      result += word;
-    } else {
-      result += ` ${word}`;
-    }
-  }
-
-  return result.trim();
-}
-
-function mergeIntensityScores(intensities: number[]) {
-  if (intensities.length === 0) {
-    return 0;
-  }
-
-  let merged = 1;
-  for (const intensity of intensities) {
-    const clamped = Math.max(0, Math.min(1, intensity));
-    merged *= 1 - clamped;
-  }
-
-  return Number((1 - merged).toFixed(4));
-}
-
 async function fetchArtifactJson<T>(key: string): Promise<T> {
   const response = await fetch(getBunnyArtifactStorageUrl(key), {
     headers: {
@@ -422,15 +391,8 @@ function normalizeTranscriptSentences(args: {
   });
 }
 
-function buildNormalizedLaughRegions(args: {
-  lines: Array<{
-    ordinal: number;
-    startSeconds: number;
-    endSeconds: number;
-  }>;
-  payload: LaughCandidatesPayload;
-}) {
-  const candidateSegments = (args.payload.segments ?? [])
+function buildNormalizedLaughRegions(payload: LaughCandidatesPayload) {
+  const candidateSegments = (payload.segments ?? [])
     .map((segment) => ({
       startSeconds: Number(segment.start_time ?? 0),
       endSeconds: Number(segment.end_time ?? segment.start_time ?? 0),
@@ -462,46 +424,13 @@ function buildNormalizedLaughRegions(args: {
     mergedSegments.push({ ...segment });
   }
 
-  const normalizedSegments: Array<{
-    lineOrdinal: number;
-    ordinal: number;
-    startSeconds: number;
-    endSeconds: number;
-    intensityScore: number;
-  }> = [];
-
-  for (const segment of mergedSegments) {
-    const owningLine =
-      args.lines.find(
-        (line) =>
-          segment.startSeconds >= line.startSeconds &&
-          segment.startSeconds <= line.endSeconds,
-      ) ??
-      [...args.lines]
-        .reverse()
-        .find((line) => line.startSeconds <= segment.startSeconds) ??
-      args.lines[0];
-
-    if (!owningLine) {
-      continue;
-    }
-
-    normalizedSegments.push({
-      lineOrdinal: owningLine.ordinal,
-      ordinal: normalizedSegments.length + 1,
-      startSeconds: roundToMillis(
-        Math.max(segment.startSeconds, owningLine.startSeconds),
-      ),
-      endSeconds: roundToMillis(
-        Math.max(segment.endSeconds, segment.startSeconds),
-      ),
-      intensityScore: Number(
-        Math.max(0, Math.min(1, segment.intensityScore)).toFixed(4),
-      ),
-    });
-  }
-
-  return normalizedSegments;
+  return mergedSegments.map((segment, index) => ({
+    lineOrdinal: 0,
+    ordinal: index + 1,
+    startSeconds: roundToMillis(segment.startSeconds),
+    endSeconds: roundToMillis(segment.endSeconds),
+    intensityScore: Number(Math.max(0, Math.min(1, segment.intensityScore)).toFixed(4)),
+  }));
 }
 
 async function refreshBreakdownEditability(
@@ -1085,81 +1014,168 @@ export const replaceNormalizedLines = internalMutation({
   },
 });
 
+const timedWordValidator = v.object({ word: v.string(), start: v.number(), end: v.number() });
+
+export const timedWordsValidator = v.array(v.array(timedWordValidator));
+
+export async function loadArchivedWords(ctx: ActionCtx, ingestJobId: Id<"ingestJobs">) {
+  const archive = await ctx.runQuery(internal.setIngest.getCanonicalArtifact, {
+    ingestJobId,
+    kind: "transcriptRaw",
+  });
+  if (!archive) return [];
+  const response = await fetch(getBunnyArtifactStorageUrl(archive.key), {
+    headers: { AccessKey: getBunnyStorageApiKey() },
+  });
+  if (response.status === 404) return [];
+  if (!response.ok) throw new Error(`Transcript archive fetch failed: ${response.status}`);
+  const payload = await response.json() as TranscriptArtifactPayload | null;
+  if (!Array.isArray(payload?.words) || payload.words.some((word) =>
+    !word || typeof word.word !== "string" || typeof word.start !== "number" || typeof word.end !== "number"
+  )) return [];
+  const words = payload.words
+    .filter(({ word }) => word.trim())
+    .map(({ word, start, end }) => ({ word: word.trim(), start, end }));
+  // Convex caps each serialized array at 8,192 values.
+  const batches: TimedWord[][] = [];
+  for (let offset = 0; offset < words.length; offset += 8_192) {
+    batches.push(words.slice(offset, offset + 8_192));
+  }
+  return batches;
+}
+
+async function persistSpokenLines(
+  ctx: MutationCtx,
+  breakdownId: Id<"breakdowns">,
+  duration: number,
+  existingLaughs: Doc<"laughRegions">[],
+  laughs: AcceptedLaugh[],
+  words: TimedWord[],
+) {
+  const lines = await ctx.db.query("lines")
+    .withIndex("by_breakdownId_and_ordinal", (q) => q.eq("breakdownId", breakdownId))
+    .take(8_193);
+  if (lines.length > 8_192) throw new Error("Breakdown exceeds the Line limit.");
+  const split = splitLinesForLaughs(lines, laughs, words, duration);
+  const linesByOrdinal = new Map(lines.map((line) => [line.ordinal, line]));
+  const retainedIds = new Set<Id<"lines">>();
+  for (const region of existingLaughs) await ctx.db.delete(region._id);
+
+  const saved: Array<AcceptedLaugh & { ordinal: number; lineOrdinal: number }> = [];
+  for (const [index, line] of split.entries()) {
+    const { sourceOrdinal, laugh, ...spokenLine } = line;
+    const fields = {
+      ...spokenLine,
+      ordinal: index + 1,
+      laughCount: laugh ? 1 : 0,
+      laughIntensityScore: laugh?.intensityScore ?? 0,
+    };
+    const original = linesByOrdinal.get(sourceOrdinal);
+    let lineId: Id<"lines">;
+    if (original && !retainedIds.has(original._id)) {
+      lineId = original._id;
+      await ctx.db.patch(lineId, fields);
+    } else {
+      lineId = await ctx.db.insert("lines", { breakdownId, ...fields });
+    }
+    retainedIds.add(lineId);
+    if (laugh) {
+      const region = { ordinal: saved.length + 1, ...laugh };
+      await ctx.db.insert("laughRegions", { breakdownId, lineId, ...region });
+      saved.push({ lineOrdinal: fields.ordinal, ...region });
+    }
+  }
+  for (const line of lines) {
+    if (!retainedIds.has(line._id)) await ctx.db.delete(line._id);
+  }
+  await ctx.db.patch(breakdownId, { spokenLinesMigrated: true });
+  return saved;
+}
+
+async function loadSavedLaughs(ctx: MutationCtx, breakdownId: Id<"breakdowns">) {
+  const laughs = await ctx.db.query("laughRegions")
+    .withIndex("by_breakdownId_and_ordinal", (q) => q.eq("breakdownId", breakdownId))
+    .take(8_193);
+  if (laughs.length > 8_192) throw new Error("Breakdown exceeds the Laugh Region limit.");
+  return laughs;
+}
+
 export const replaceNormalizedLaughRegions = internalMutation({
   args: {
     breakdownId: v.id("breakdowns"),
     laughRegions: v.array(normalizedLaughRegionValidator),
+    words: v.optional(timedWordsValidator),
   },
-  returns: v.null(),
+  returns: v.array(normalizedLaughRegionValidator),
   handler: async (ctx, args) => {
     const breakdown = await ctx.db.get(args.breakdownId);
-    if (breakdown === null || (await ctx.db.get(breakdown.setId)) === null) {
-      return null;
+    const set = breakdown ? await ctx.db.get(breakdown.setId) : null;
+    if (!breakdown || !set || breakdown.editability === "editable" || breakdown.laughSeededAt) return [];
+
+    const existing = await loadSavedLaughs(ctx, args.breakdownId);
+    if (breakdown.spokenLinesMigrated) {
+      const lineOrdinals = new Map(await Promise.all(existing.map(async (region) => [region.lineId, (await ctx.db.get(region.lineId))!.ordinal] as const)));
+      return existing.map(({ lineId, ordinal, startSeconds, endSeconds, intensityScore }) => ({
+        lineOrdinal: lineOrdinals.get(lineId)!, ordinal, startSeconds, endSeconds, intensityScore,
+      }));
     }
+    return persistSpokenLines(ctx, args.breakdownId, set.trimRangeEndSeconds - set.trimRangeStartSeconds,
+      existing, args.laughRegions.map(({ startSeconds, endSeconds, intensityScore }) => ({
+        startSeconds, endSeconds, intensityScore,
+      })), args.words?.flat() ?? []);
+  },
+});
 
-    if (breakdown.editability === "editable" || breakdown.laughSeededAt) return null;
-    while (true) {
-      const existingLaughs = await ctx.db
-        .query("laughRegions")
-        .withIndex("by_breakdownId_and_ordinal", (q) =>
-          q.eq("breakdownId", args.breakdownId),
-        )
-        .take(128);
-
-      if (existingLaughs.length === 0) {
-        break;
-      }
-
-      for (const laughRegion of existingLaughs) {
-        await ctx.db.delete(laughRegion._id);
-      }
+export const listSpokenLineBackfill = internalQuery({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const batch = await ctx.db.query("breakdowns").paginate(args.paginationOpts);
+    const items = [];
+    for (const breakdown of batch.page) {
+      if (breakdown.spokenLinesMigrated || breakdown.lineSeedingState !== "ready" ||
+        (breakdown.laughSeedingState !== "ready" && breakdown.laughSeedingState !== "failed")) continue;
+      const job = await ctx.db.query("ingestJobs")
+        .withIndex("by_breakdownId", (q) => q.eq("breakdownId", breakdown._id))
+        .order("desc").first();
+      items.push({ breakdownId: breakdown._id, ingestJobId: job?._id });
     }
+    return { items, cursor: batch.continueCursor, done: batch.isDone };
+  },
+});
 
-    const lines = await ctx.db
-      .query("lines")
-      .withIndex("by_breakdownId_and_ordinal", (q) =>
-        q.eq("breakdownId", args.breakdownId),
-      )
-      .take(2_000);
+export const backfillSpokenLineBreakdown = internalMutation({
+  args: { breakdownId: v.id("breakdowns"), words: timedWordsValidator },
+  handler: async (ctx, args) => {
+    const breakdown = await ctx.db.get(args.breakdownId);
+    const set = breakdown ? await ctx.db.get(breakdown.setId) : null;
+    if (!breakdown || !set || breakdown.spokenLinesMigrated || breakdown.lineSeedingState !== "ready" ||
+      (breakdown.laughSeedingState !== "ready" && breakdown.laughSeedingState !== "failed")) return false;
+    const existing = await loadSavedLaughs(ctx, args.breakdownId);
+    const laughs = existing.map(({ startSeconds, endSeconds, intensityScore }) => ({
+      startSeconds, endSeconds, intensityScore,
+    }));
+    await persistSpokenLines(ctx, args.breakdownId, set.trimRangeEndSeconds - set.trimRangeStartSeconds,
+      existing, laughs, args.words.flat());
+    await ctx.db.patch(args.breakdownId, { editRevision: (breakdown.editRevision ?? 0) + 1 });
+    return true;
+  },
+});
 
-    const linesByOrdinal = new Map(lines.map((line) => [line.ordinal, line] as const));
-    const laughsByLineOrdinal = new Map<number, typeof args.laughRegions>();
-
-    for (const laughRegion of args.laughRegions) {
-      const existing = laughsByLineOrdinal.get(laughRegion.lineOrdinal) ?? [];
-      existing.push(laughRegion);
-      laughsByLineOrdinal.set(laughRegion.lineOrdinal, existing);
+export const backfillSpokenLines = internalAction({
+  args: { cursor: v.optional(v.string()) },
+  returns: v.object({ cursor: v.string(), done: v.boolean(), migrated: v.number() }),
+  handler: async (ctx, args): Promise<{ cursor: string; done: boolean; migrated: number }> => {
+    const batch = await ctx.runQuery(internal.setIngest.listSpokenLineBackfill, {
+      paginationOpts: { cursor: args.cursor ?? null, numItems: 10 },
+    });
+    let migrated = 0;
+    for (const item of batch.items) {
+      const words = item.ingestJobId ? await loadArchivedWords(ctx, item.ingestJobId) : [];
+      if (await ctx.runMutation(internal.setIngest.backfillSpokenLineBreakdown, {
+        breakdownId: item.breakdownId, words,
+      })) migrated++;
     }
-
-    for (const line of lines) {
-      const assignedLaughs = laughsByLineOrdinal.get(line.ordinal) ?? [];
-      await ctx.db.patch(line._id, {
-        laughCount: assignedLaughs.length,
-        laughIntensityScore: mergeIntensityScores(
-          assignedLaughs.map((laugh) => laugh.intensityScore),
-        ),
-      });
-    }
-
-    for (const laughRegion of args.laughRegions) {
-      const line = linesByOrdinal.get(laughRegion.lineOrdinal);
-      if (!line) {
-        throw new Error(
-          `Missing line ${laughRegion.lineOrdinal} while saving laugh regions.`,
-        );
-      }
-
-      await ctx.db.insert("laughRegions", {
-        breakdownId: args.breakdownId,
-        lineId: line._id,
-        ordinal: laughRegion.ordinal,
-        startSeconds: laughRegion.startSeconds,
-        endSeconds: laughRegion.endSeconds,
-        intensityScore: laughRegion.intensityScore,
-      });
-    }
-
-    return null;
+    return { cursor: batch.cursor, done: batch.done, migrated };
   },
 });
 
@@ -1290,22 +1306,12 @@ export const normalizeLines = internalAction({
       throw new Error("Missing transcript artifact for line normalization.");
     }
 
-    const laughCandidates = await ctx.runQuery(
-      internal.setIngest.getCanonicalArtifact,
-      {
-        ingestJobId: args.ingestJobId,
-        kind: "laughCandidatesRaw",
-      },
-    );
-    const laughPayload = laughCandidates
-      ? await fetchArtifactJson<LaughCandidatesPayload>(laughCandidates.key)
-      : null;
     const transcriptPayload =
       await fetchArtifactJson<TranscriptArtifactPayload>(transcript.key);
 
     const normalizedLines = normalizeTranscriptSentences({
       payload: transcriptPayload,
-      totalDurationHint: laughPayload?.total_duration ?? (await ctx.runQuery(internal.calibration.retainedDuration, { ingestJobId: args.ingestJobId }) ?? undefined),
+      totalDurationHint: await ctx.runQuery(internal.calibration.retainedDuration, { ingestJobId: args.ingestJobId }) ?? undefined,
     });
 
     await ctx.runMutation(internal.setIngest.replaceNormalizedLines, {
@@ -1365,34 +1371,12 @@ export const normalizeLaughRegions = internalAction({
       throw new Error("Missing laugh candidates artifact for normalization.");
     }
 
-    const lines: Array<{
-      ordinal: number;
-      startSeconds: number;
-      endSeconds: number;
-    }> = await ctx.runQuery(internal.sets.getBreakdownLinesInternal, {
+    const candidatePayload = await fetchArtifactJson<LaughCandidatesPayload>(candidates.key);
+    const words = await loadArchivedWords(ctx, args.ingestJobId);
+    const normalizedLaughs = await ctx.runMutation(internal.setIngest.replaceNormalizedLaughRegions, {
       breakdownId: args.breakdownId,
-    });
-
-    if (lines.length === 0) {
-      throw new Error(
-        "Missing normalized lines before laugh region normalization.",
-      );
-    }
-
-    const candidatePayload =
-      await fetchArtifactJson<LaughCandidatesPayload>(candidates.key);
-    const normalizedLaughs = buildNormalizedLaughRegions({
-      lines: lines.map((line) => ({
-        ordinal: line.ordinal,
-        startSeconds: line.startSeconds,
-        endSeconds: line.endSeconds,
-      })),
-      payload: candidatePayload,
-    });
-
-    await ctx.runMutation(internal.setIngest.replaceNormalizedLaughRegions, {
-      breakdownId: args.breakdownId,
-      laughRegions: normalizedLaughs,
+      laughRegions: buildNormalizedLaughRegions(candidatePayload),
+      words,
     });
 
     const artifactKey = buildExpectedArtifactKey({
