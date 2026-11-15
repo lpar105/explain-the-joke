@@ -242,7 +242,6 @@ export default defineSchema({
     lastContactAt: v.optional(v.number()),
     confirmedSetId: v.optional(v.id("sets")),
   })
-    .index("by_ownerTokenIdentifier", ["ownerTokenIdentifier"])
     .index("by_muxUploadId", ["muxUploadId"])
     .index("by_muxAssetId", ["muxAssetId"])
     .index("by_confirmedSetId", ["confirmedSetId"]),

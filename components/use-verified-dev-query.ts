@@ -1,19 +1,20 @@
 "use client";
 
 import { useAuth } from "@clerk/nextjs";
-import { ConvexReactClient, type Watch } from "convex/react";
-import { useCallback, useEffect, useState } from "react";
+import { ConvexReactClient } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
+import { useEffect, useState } from "react";
 
 import { api } from "../convex/_generated/api";
 
-type WatchQuery<Result> = (client: ConvexReactClient) => Watch<Result>;
+type ArtifactResult = FunctionReturnType<typeof api.sets.listDevArtifacts>;
 
-function useVerifiedDevQuery<Result>(watchQuery: WatchQuery<Result>, enabled: boolean) {
+export function useVerifiedSetArtifacts(setId: string, enabled: boolean) {
   const { getToken, sessionId } = useAuth();
   const [response, setResponse] = useState<{
     sessionId: string;
-    watchQuery: WatchQuery<Result>;
-    value: Result | null | undefined;
+    setId: string;
+    value: ArtifactResult | undefined;
   }>();
 
   useEffect(() => {
@@ -22,10 +23,10 @@ function useVerifiedDevQuery<Result>(watchQuery: WatchQuery<Result>, enabled: bo
     const client = new ConvexReactClient(process.env.NEXT_PUBLIC_CONVEX_URL!);
     let disposed = false;
     let unsubscribe: (() => void) | undefined;
-    const publish = (value: Result | null | undefined) => {
-      if (!disposed) setResponse({ sessionId, watchQuery, value });
+    const publish = (value: ArtifactResult | undefined) => {
+      if (!disposed) setResponse({ sessionId, setId, value });
     };
-    const watch = watchQuery(client);
+    const watch = client.watchQuery(api.sets.listDevArtifacts, { setId });
     client.setAuth(
       ({ forceRefreshToken }) => getToken({ template: "set-dev", skipCache: forceRefreshToken }).catch(() => null),
       (authenticated) => {
@@ -54,23 +55,9 @@ function useVerifiedDevQuery<Result>(watchQuery: WatchQuery<Result>, enabled: bo
       unsubscribe?.();
       void client.close();
     };
-  }, [enabled, getToken, sessionId, watchQuery]);
+  }, [enabled, getToken, sessionId, setId]);
 
-  if (enabled && response && response.sessionId === sessionId && response.watchQuery === watchQuery) {
+  if (enabled && response && response.sessionId === sessionId && response.setId === setId) {
     return response.value;
   }
-}
-
-export function useVerifiedSetArtifacts(setId: string, enabled: boolean) {
-  const watch = useCallback(
-    (client: ConvexReactClient) => client.watchQuery(api.sets.listDevArtifacts, { setId }),
-    [setId],
-  );
-  return useVerifiedDevQuery(watch, enabled);
-}
-
-const watchDashboard = (client: ConvexReactClient) => client.watchQuery(api.sets.getDevPipelineDashboard, {});
-
-export function useVerifiedPipelineDashboard(enabled: boolean) {
-  return useVerifiedDevQuery(watchDashboard, enabled);
 }

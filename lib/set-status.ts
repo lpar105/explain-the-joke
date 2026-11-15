@@ -1,10 +1,3 @@
-import type { Doc } from "../convex/_generated/dataModel";
-
-type SetStatus = Doc<"sets">["setStatus"];
-type BreakdownEditability = Doc<"breakdowns">["editability"];
-type LineSeedingState = Doc<"breakdowns">["lineSeedingState"];
-type LaughSeedingState = Doc<"breakdowns">["laughSeedingState"];
-
 export function formatDuration(seconds: number) {
   const minutes = Math.floor(seconds / 60);
   const remainder = Math.floor(seconds % 60);
@@ -40,65 +33,4 @@ export function getSetDateInputValue(performanceDate: string | null, creationTim
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-export function getSetStatusLabel(status: SetStatus) {
-  switch (status) {
-    case "playbackPending":
-      return "Playback Pending";
-    case "playable":
-      return "Playable";
-    case "unavailable":
-      return "Unavailable";
-    default:
-      return status;
-  }
-}
-
-export function getBreakdownBadgeLabel(
-  editability: BreakdownEditability,
-  lineSeedingState: LineSeedingState,
-  laughSeedingState: LaughSeedingState,
-) {
-  if (editability === "editable") {
-    return "Breakdown Editable";
-  }
-
-  if (lineSeedingState === "failed") {
-    return "Lines Failed";
-  }
-
-  if (laughSeedingState === "failed") {
-    return "Laughs Failed";
-  }
-
-  if (lineSeedingState === "ready" && laughSeedingState !== "ready") {
-    return "Breakdown Locked";
-  }
-
-  return "Breakdown Pending";
-}
-
-export function getBreakdownSummary(
-  editability: BreakdownEditability,
-  lineSeedingState: LineSeedingState,
-  laughSeedingState: LaughSeedingState,
-) {
-  if (editability === "editable") {
-    return "Lines and Laugh Regions are ready for editing.";
-  }
-
-  if (lineSeedingState === "failed") {
-    return "This Set may still become playable, but the current Breakdown is unavailable.";
-  }
-
-  if (laughSeedingState === "failed") {
-    return "Lines can be reviewed while laugh seeding failed and manual laugh editing stays pending unlock.";
-  }
-
-  if (lineSeedingState === "ready") {
-    return "The review surface can open while the current Breakdown stays locked.";
-  }
-
-  return "The current Breakdown shell exists, but seeded Lines and Laugh Regions are still pending.";
 }
