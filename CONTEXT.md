@@ -5,7 +5,7 @@ Tight Five is a performance review product for standup comedians. It organizes u
 ## Language
 
 **Set**:
-One retained audio or video performance recording in a user's library with a stable identity.
+One retained video performance recording in a user's library with a stable identity.
 _Avoid_: Upload, file, clip, recording
 
 **Breakdown**:
@@ -13,12 +13,16 @@ The current editable analysis artifact for a set.
 _Avoid_: Revision, pass, version, report
 
 **Line**:
-A readable timed unit in the breakdown transcript that the comic can review, click, and edit in sync with playback.
+A timed unit of spoken words in the Breakdown transcript.
 _Avoid_: Sentence, utterance
 
 **Laugh Region**:
-A timed audience-laughter event owned by the line during which the laugh begins.
+A timed audience-laughter event associated with a Line.
 _Avoid_: Reaction, laugh marker, applause block
+
+**Calibration Sample**:
+A manually labeled excerpt of a Set used to calibrate laughter detection for that Set.
+_Avoid_: Training set, room profile
 
 **Share Link**:
 An access grant that exposes a read-only review surface for a set and its current breakdown, either to any signed-in user with the link or to specific usernames.
@@ -51,10 +55,6 @@ _Avoid_: Job status, pipeline state
 **Metadata Field**:
 A user-defined labeled value attached to a set or chapter, with performance date as the only built-in default field at the set level.
 _Avoid_: Schema field, system property
-
-**Trash Window**:
-The three-day retention period after a user intentionally deletes a set and before it is permanently removed.
-_Avoid_: Soft delete, archive period
 
 **Shared Review**:
 A set another user can access through a share link and revisit later from their own account.
@@ -97,7 +97,8 @@ _Avoid_: Trial grace window, billing retry
 - A **Set** has at most one active **Playback Source**
 - A **Set** has exactly one current **Set Status**
 - A **Laugh Region** belongs to exactly one **Line**
-- **Lines** form one continuous active track across the playable timeline of a **Set**
+- When a **Set** has spoken words, its **Lines** form one continuous active track across the playable timeline
+- A **Set** without spoken words has no **Lines** or **Laugh Regions**
 - A **Set** can be defined by one upload-time **Trim Range**
 - The retained media for a **Set** is the trimmed media chosen during upload
 - A **Set** can have zero or more **Metadata Fields**
@@ -108,7 +109,6 @@ _Avoid_: Trial grace window, billing retry
 - A **Username** resolves to one user account, but sharing grants belong to the underlying account identity
 - A user account has exactly one current **Plan**
 - A free-plan user has a 30-minute **Lifetime Upload Quota**
-- A user-intentionally deleted **Set** remains recoverable during its **Trash Window**
 - When a paid user stops paying, their owned **Set** library is locked during the **Resubscribe Window**
 - If a paid user does not resubscribe during the **Resubscribe Window**, their owned **Set** library is permanently removed at the end of that window
 - A free user who has exhausted their **Lifetime Upload Quota** keeps access to existing owned sets but cannot upload additional set duration
@@ -136,9 +136,6 @@ _Avoid_: Trial grace window, billing retry
 >
 > **Dev:** "Does the comic need to know which vendor is serving playback right now?"
 > **Domain expert:** "No; the **Set** stays stable in the product while its active **Playback Source** can change behind the scenes."
->
-> **Dev:** "Can a **Set** be audio-only?"
-> **Domain expert:** "Yes; a **Set** is a performance recording, so audio-only and video recordings both use the same review model."
 >
 > **Dev:** "Can the comic rerun analysis on a **Set** after upload?"
 > **Domain expert:** "No; reprocessing is not a user-facing workflow in the product, and the comic works against the current **Breakdown**."
@@ -172,9 +169,6 @@ _Avoid_: Trial grace window, billing retry
 >
 > **Dev:** "Who owns a **Bit**?"
 > **Domain expert:** "A **Bit** belongs to the comedian who owns the set; collaborators can discuss material but do not own the comic's reusable catalog."
->
-> **Dev:** "Is deleting a **Set** immediate and permanent?"
-> **Domain expert:** "No; a deleted **Set** enters a three-day **Trash Window** before permanent removal."
 >
 > **Dev:** "After a reviewer signs in through a **Share Link**, can they only return with the original URL?"
 > **Domain expert:** "No; that access should persist as a **Shared Review** the reviewer can revisit from their own account."
@@ -224,11 +218,8 @@ _Avoid_: Trial grace window, billing retry
 > **Dev:** "Are headline metrics edited directly?"
 > **Domain expert:** "No; headline metrics are derived from the current **Breakdown**, but the comic can edit the underlying **Laugh Regions**, including their intensity, so the metrics reflect corrected review data."
 >
-> **Dev:** "How is laugh intensity represented?"
-> **Domain expert:** "A **Laugh Region** stores a decimal intensity value under the hood, but the comic edits it using human-facing grades like A+, A, B, C, or F."
->
 > **Dev:** "Can one **Set** contain multiple uploaded source files?"
-> **Domain expert:** "No; in v1 a **Set** is built from one contiguous uploaded audio or video file."
+> **Domain expert:** "No; in v1 a **Set** is built from one contiguous uploaded video file."
 >
 > **Dev:** "Is transcript content searchable in the library?"
 > **Domain expert:** "Yes; transcript content and user-defined metadata are both searchable, but they should be queried through explicit scoped search rather than treated as one undifferentiated search surface."
@@ -244,9 +235,6 @@ _Avoid_: Trial grace window, billing retry
 >
 > **Dev:** "Can a **Bit** exist before it is linked to any performed material?"
 > **Domain expert:** "No; a **Bit** comes into existence from real performed **Chapters**, not as a standalone idea with no set history."
->
-> **Dev:** "What happens during silence between spoken moments?"
-> **Domain expert:** "The previous **Line** remains active, so the line track stays continuous even when the performer pauses."
 >
 > **Dev:** "Who can make a **Comment Thread** private?"
 > **Domain expert:** "Only the comedian who owns the **Set** can switch a **Comment Thread** between shared and private visibility."
@@ -268,9 +256,6 @@ _Avoid_: Trial grace window, billing retry
 >
 > **Dev:** "Do **Share Links** expire automatically?"
 > **Domain expert:** "No; access continues until the owner revokes it or the underlying **Set** disappears."
->
-> **Dev:** "Does deleting a **Set** give back free upload capacity?"
-> **Domain expert:** "No; the free plan uses a 30-minute **Lifetime Upload Quota**, so permanently removed sets still count against what that account has uploaded."
 >
 > **Dev:** "What happens when a paid user downgrades?"
 > **Domain expert:** "Downgrading does not put them back under the free upload trial model; instead their sets enter a seven-day **Resubscribe Window** where those sets are locked while they can still resubscribe."
@@ -342,4 +327,3 @@ _Avoid_: Trial grace window, billing retry
 
 - "rerun analysis" is not a product capability for comics; any reprocessing belongs to internal development or testing workflows, not the user-facing domain model.
 - "ready" is overloaded: a **Set** can be playable before its **Breakdown** is complete, so playback readiness and analysis readiness must not be conflated.
-- **Trash Window** and **Resubscribe Window** are different: the **Trash Window** applies only to intentional deletion by the user, while the **Resubscribe Window** is a seven-day payment-recovery lockout after a paid user stops paying.
