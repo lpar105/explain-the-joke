@@ -9,7 +9,7 @@ import { api } from "../convex/_generated/api";
 import type { Id } from "../convex/_generated/dataModel";
 import { constrainLaughMark, retimeLaughMark } from "../lib/calibration";
 import { getErrorMessageForCode, toAppError } from "../lib/errors";
-import { activeReviewLine, formatReviewTime, reviewLaughs } from "../lib/set-review";
+import { activeReviewLine, formatReviewTime, laughIntensityColor, reviewLaughs, timingWindowAt, zoomTimingWindow } from "../lib/set-review";
 import type { TranscriptSentence } from "../lib/setAnalysis";
 import { clampTime } from "../lib/trim-range";
 import { Button } from "./ui/button";
@@ -17,16 +17,20 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { type PlaybackSource, useSetPlayback } from "./use-set-playback";
 import styles from "./set-edit-dialog.module.css";
 
-const windowLength = 20;
+const minWindowLength = 1;
+const zoomSliderSteps = 1000;
 const handleStep = 0.05;
 
-type Laugh = { key: number; index: number | null; start: number; end: number };
+type Laugh = { key: number; index: number | null; start: number; end: number; intensityScore: number };
 type Edge = "start" | "end";
 type Drag = {
   origin: number;
   windowStart: number;
   windowEnd: number;
-  action: { key: number; edge?: Edge; boundary?: number } | null;
+  action:
+    | { kind: "resize"; key: number; edge: Edge; boundary: number }
+    | { kind: "intensity"; key: number; score: number; x: number; y: number; adjusting: boolean }
+    | null;
 };
 
 type Props = {
@@ -48,13 +52,17 @@ function preciseTime(seconds: number) {
   return `${formatReviewTime(hundredths / 100)}.${String(hundredths % 100).padStart(2, "0")}`;
 }
 
+function intensityPercent(score: number) {
+  return Math.round(clampTime(score, 0, 1) * 100);
+}
+
 export function SetEditDialog(props: Props) {
   const {
     attachMedia, currentTime, duration, canSeek, playing, seek, status, pausePlayback, togglePlayback, retryPlayback,
-  } = useSetPlayback(props.source, props.trimStart, props.trimEnd, props.initialTime);
+  } = useSetPlayback(props.source, props.trimStart, props.trimEnd, props.initialTime, { frameUpdates: true });
   const saveBreakdown = useMutation(api.sets.saveBreakdownEdits);
   const [originals] = useState<Laugh[]>(() => reviewLaughs(props.lines).map(({ laugh }, key) => ({
-    key, index: laugh.index, start: laugh.start_time, end: laugh.end_time,
+    key, index: laugh.index, start: laugh.start_time, end: laugh.end_time, intensityScore: laugh.intensity_score,
   })));
   const [laughs, setLaughs] = useState(originals);
   const [words, setWords] = useState<Record<number, string>>({});
@@ -62,6 +70,7 @@ export function SetEditDialog(props: Props) {
   const [mark, setMark] = useState<number | null>(null);
   const [preview, setPreview] = useState<{ start: number; end: number } | null>(null);
   const [dragWindow, setDragWindow] = useState<number | null>(null);
+  const [zoom, setZoom] = useState({ length: 20, origin: 0 });
   const [feedback, setFeedback] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -70,17 +79,28 @@ export function SetEditDialog(props: Props) {
   const drag = useRef<Drag | null>(null);
   const startButton = useRef<HTMLButtonElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
-  const lastWindowStart = Math.max(0, (Math.ceil(duration / windowLength) - 1) * windowLength);
-  const windowStart = dragWindow ?? Math.min(lastWindowStart, Math.floor(currentTime / windowLength) * windowLength);
-  const windowEnd = Math.min(duration, windowStart + windowLength);
-  const percent = (time: number) => clampTime((time - windowStart) / (windowEnd - windowStart || 1) * 100, 0, 100);
+  const maxWindowLength = Math.max(duration, minWindowLength);
+  const windowLength = clampTime(zoom.length, minWindowLength, maxWindowLength);
+  const zoomFactor = maxWindowLength / minWindowLength;
+  // Equal slider movements change the time scale by the same ratio.
+  const zoomPosition = zoomFactor > 1
+    ? Math.round(zoomSliderSteps * Math.log(maxWindowLength / windowLength) / Math.log(zoomFactor))
+    : 0;
+  const timeline = timingWindowAt(currentTime, duration, windowLength, zoom.origin);
+  const windowStart = dragWindow ?? timeline.start;
+  const windowEnd = dragWindow === null ? timeline.end : windowStart + windowLength;
+  const playableStart = Math.max(0, windowStart);
+  const playableEnd = Math.min(duration, windowEnd);
+  const percent = (time: number) => clampTime((time - windowStart) / windowLength * 100, 0, 100);
   const activeLine = activeReviewLine(props.lines, currentTime);
-  const jumpTo = laughs.find(laugh => laugh.key === selected) ??
+  const selectedLaugh = laughs.find(laugh => laugh.key === selected);
+  const jumpTo = selectedLaugh ??
     laughs.find(laugh => laugh.end > currentTime) ?? laughs.at(-1);
   const canMark = !saving && canSeek && props.lines.length > 0;
   const bounds = { start: 0, end: duration };
   const laughsChanged = laughs.length !== originals.length || laughs.some((laugh, index) =>
-    laugh.key !== originals[index]?.key || laugh.start !== originals[index].start || laugh.end !== originals[index].end);
+    laugh.key !== originals[index]?.key || laugh.start !== originals[index].start ||
+    laugh.end !== originals[index].end || laugh.intensityScore !== originals[index].intensityScore);
   const textEdits = useMemo(() => props.lines.flatMap(line => {
     const text = words[line.index]?.trim();
     return text !== undefined && text !== line.text ? [{ index: line.index, text }] : [];
@@ -104,13 +124,46 @@ export function SetEditDialog(props: Props) {
     setSelected(null);
   }, [seek]);
 
+  function changeIntensity(key: number, intensityScore: number) {
+    setLaughs(current => current.map(laugh =>
+      laugh.key === key ? { ...laugh, intensityScore } : laugh));
+    setError("");
+  }
+
+  function intensityKey(event: KeyboardEvent, laugh: Laugh) {
+    if (saving) return;
+    const step = event.shiftKey ? 10 : 1;
+    const score = intensityPercent(laugh.intensityScore);
+    let next: number;
+    switch (event.key) {
+      case "ArrowUp":
+      case "ArrowRight":
+        next = score + step;
+        break;
+      case "ArrowDown":
+      case "ArrowLeft":
+        next = score - step;
+        break;
+      case "Home":
+        next = 0;
+        break;
+      case "End":
+        next = 100;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    changeIntensity(laugh.key, clampTime(next, 0, 100) / 100);
+  }
+
   function addLaugh(region: { start: number; end: number } | null) {
     if (!region) {
       setFeedback("Choose a range outside the existing laughs.");
       return;
     }
     const key = nextKey.current++;
-    setLaughs(current => [...current, { ...region, key, index: null }].sort((a, b) => a.start - b.start));
+    setLaughs(current => [...current, { ...region, key, index: null, intensityScore: 0.5 }].sort((a, b) => a.start - b.start));
     setSelected(key);
     setFeedback("Laugh added.");
     setError("");
@@ -131,17 +184,21 @@ export function SetEditDialog(props: Props) {
     const rect = event.currentTarget.getBoundingClientRect();
     const fraction = clampTime((event.clientX - rect.left) / rect.width, 0, 1);
     const raw = range.windowStart + fraction * (range.windowEnd - range.windowStart);
-    return clampTime(Math.round(raw * 1000) / 1000, range.windowStart, range.windowEnd);
+    return clampTime(Math.round(raw * 1000) / 1000, Math.max(0, range.windowStart), Math.min(duration, range.windowEnd));
   }
 
   function beginDrag(event: PointerEvent<HTMLDivElement>) {
-    if (!canMark || !event.isPrimary || event.button !== 0 || (event.target as HTMLElement).closest("button[data-delete]")) return;
+    if (saving || !event.isPrimary || event.button !== 0 ||
+        (event.target as HTMLElement).closest("[data-delete], [data-padding]")) return;
     const target = (event.target as HTMLElement).closest<HTMLElement>("[data-laugh]");
     const key = target ? Number(target.dataset.laugh) : null;
     const region = laughs.find(laugh => laugh.key === key);
     const edge = (event.target as HTMLElement).closest<HTMLElement>("[data-edge]")?.dataset.edge as Edge | undefined;
+    if ((!region || edge) && !canMark) return;
     const range = { windowStart, windowEnd };
-    const action = region ? { key: region.key, edge, boundary: edge ? region[edge] : undefined } : null;
+    const action: Drag["action"] = !region ? null : edge
+      ? { kind: "resize", key: region.key, edge, boundary: region[edge] }
+      : { kind: "intensity", key: region.key, score: region.intensityScore, x: event.clientX, y: event.clientY, adjusting: false };
     drag.current = { origin: pointerTime(event, range), ...range, action };
     setDragWindow(windowStart);
     if (region) setSelected(region.key);
@@ -153,7 +210,7 @@ export function SetEditDialog(props: Props) {
     if (!moving || !event.currentTarget.hasPointerCapture(event.pointerId)) return;
     const time = pointerTime(event, moving);
     const action = moving.action;
-    if (action?.edge && action.boundary !== undefined) {
+    if (action?.kind === "resize") {
       resizeLaugh(action.key, action.edge, action.boundary + (time - moving.origin));
     } else if (!action) {
       const creating = Math.abs(time - moving.origin) >= handleStep;
@@ -161,8 +218,15 @@ export function SetEditDialog(props: Props) {
       if (!finish) setPreview(candidate);
       else if (creating) addLaugh(candidate);
       else seekToLine(time);
-    } else if (finish) {
-      seek(time);
+    } else {
+      const delta = action.y - event.clientY;
+      if (Math.abs(delta) >= 4 && Math.abs(delta) >= Math.abs(event.clientX - action.x)) action.adjusting = true;
+      if (action.adjusting) {
+        const height = event.currentTarget.clientHeight;
+        changeIntensity(action.key, delta === 0 ? action.score : intensityPercent(action.score + delta / height) / 100);
+      } else if (finish && canSeek) {
+        seek(time);
+      }
     }
     if (finish) clearDrag();
   }
@@ -175,7 +239,8 @@ export function SetEditDialog(props: Props) {
 
   function cancelDrag() {
     const action = drag.current?.action;
-    if (action?.edge && action.boundary !== undefined) resizeLaugh(action.key, action.edge, action.boundary);
+    if (action?.kind === "resize") resizeLaugh(action.key, action.edge, action.boundary);
+    if (action?.kind === "intensity" && action.adjusting) changeIntensity(action.key, action.score);
     if (drag.current) clearDrag();
   }
 
@@ -194,7 +259,7 @@ export function SetEditDialog(props: Props) {
 
   function keyboard(event: KeyboardEvent<HTMLDivElement>) {
     if (event.repeat || event.altKey || event.ctrlKey || event.metaKey ||
-        (event.target as HTMLElement).closest("input,textarea,[contenteditable]")) return;
+        (event.target as HTMLElement).closest("input,textarea,[contenteditable],[role=slider]")) return;
     if (event.key.toLowerCase() === "i") markStart();
     else if (event.key.toLowerCase() === "o") markEnd();
     else if (event.key === " " && !(event.target as HTMLElement).closest("button")) togglePlayback();
@@ -217,7 +282,7 @@ export function SetEditDialog(props: Props) {
         breakdownId: props.breakdownId,
         editRevision: props.editRevision,
         textEdits,
-        ...(laughsChanged && { laughs: laughs.map(({ index, start, end }) => ({ index, start, end })) }),
+        ...(laughsChanged && { laughs: laughs.map(({ index, start, end, intensityScore }) => ({ index, start, end, intensityScore })) }),
       });
       if (result === "saved") props.onClose(currentTime);
       else {
@@ -269,16 +334,34 @@ export function SetEditDialog(props: Props) {
                 className="w-full accent-tf-blue" onChange={event => seekToLine(event.currentTarget.valueAsNumber)} />
             </div>
             <section className="min-w-0 border-tf bg-white p-2" aria-labelledby="edit-laugh-timings">
-              <div className="mb-2 flex flex-wrap items-center justify-between gap-1">
-                <h3 id="edit-laugh-timings" className={styles.heading}>Laugh timings</h3>
+              <div className="mb-2 grid grid-cols-[minmax(0,auto)_minmax(2.75rem,1fr)_auto] items-center gap-1 sm:gap-2">
+                <h3 id="edit-laugh-timings" className={styles.heading}>
+                  Laugh timings
+                  {selectedLaugh && <> <span aria-hidden="true" className="font-mono font-normal tracking-normal" title="Selected laugh intensity">
+                    {intensityPercent(selectedLaugh.intensityScore)}%
+                  </span></>}
+                </h3>
+                <label className={styles.zoom}>
+                  <span>Zoom</span>
+                  <input type="range" min={0} max={zoomSliderSteps} step={1}
+                    value={zoomPosition} disabled={saving || dragWindow !== null || zoomFactor === 1}
+                    aria-valuetext={`${Number(windowLength.toFixed(2))} seconds per window`}
+                    onChange={event => {
+                      const position = event.currentTarget.valueAsNumber / zoomSliderSteps;
+                      const nextLength = maxWindowLength / zoomFactor ** position;
+                      setZoom(zoomTimingWindow(currentTime, windowStart, windowLength, nextLength));
+                    }} />
+                </label>
                 <div className="flex items-center gap-1">
-                  <Button variant="outline" size="sm" className="px-2" aria-label="Previous 20 seconds"
-                    disabled={!canSeek || windowStart === 0} onClick={() => seekToLine(windowStart - windowLength)}>
+                  <Button variant="outline" size="sm" className="px-1.5 sm:px-2" aria-label="Previous timeline window"
+                    disabled={!canSeek || dragWindow !== null || !timeline.hasPrevious}
+                    onClick={() => seekToLine(windowStart - windowLength)}>
                     <ArrowLeft />
                   </Button>
-                  <output className="font-mono text-xs">{formatReviewTime(windowStart)}–{formatReviewTime(windowEnd)}</output>
-                  <Button variant="outline" size="sm" className="px-2" aria-label="Next 20 seconds"
-                    disabled={!canSeek || windowStart >= lastWindowStart} onClick={() => seekToLine(windowEnd)}>
+                  <output className="font-mono text-xs">{formatReviewTime(playableStart)}–{formatReviewTime(playableEnd)}</output>
+                  <Button variant="outline" size="sm" className="px-1.5 sm:px-2" aria-label="Next timeline window"
+                    disabled={!canSeek || dragWindow !== null || !timeline.hasNext}
+                    onClick={() => seekToLine(windowEnd)}>
                     <ArrowRight />
                   </Button>
                 </div>
@@ -286,11 +369,29 @@ export function SetEditDialog(props: Props) {
               <div className={styles.strip} role="group" aria-label="Laugh timeline"
                 onPointerDown={beginDrag} onPointerMove={event => moveDrag(event)}
                 onPointerUp={event => moveDrag(event, true)} onLostPointerCapture={cancelDrag}>
+                {windowStart < 0 && <span aria-hidden="true" data-padding className={styles.padding}
+                  style={{ left: 0, width: `${percent(0)}%` }} />}
+                {windowEnd > duration && <span aria-hidden="true" data-padding className={styles.padding}
+                  style={{ left: `${percent(duration)}%`, right: 0 }} />}
                 {laughs.map((laugh, index) => {
-                  if (laugh.end <= windowStart || laugh.start >= windowEnd) return null;
+                  if (laugh.end <= playableStart || laugh.start >= playableEnd) return null;
+                  const intensity = intensityPercent(laugh.intensityScore);
+                  const left = percent(Math.max(playableStart, laugh.start));
+                  const right = percent(Math.min(playableEnd, laugh.end));
+                  const leftGap = left - percent(laughs[index - 1]?.end ?? playableStart);
+                  const rightGap = percent(laughs[index + 1]?.start ?? playableEnd) - right;
                   return <div key={laugh.key} data-laugh={laugh.key} data-selected={laugh.key === selected}
-                    className={styles.laugh} style={{ left: `${percent(laugh.start)}%`, width: `${percent(laugh.end) - percent(laugh.start)}%` }}>
+                    className={styles.laugh} style={{ left: `${left}%`, width: `${right - left}%` }}>
+                    <div role="slider" tabIndex={saving ? -1 : 0} className={styles.intensity}
+                      aria-label={`Laugh intensity at ${preciseTime(laugh.start)}`} aria-orientation="vertical"
+                      aria-valuemin={0} aria-valuemax={100} aria-valuenow={intensity} aria-valuetext={`${intensity}%`}
+                      aria-disabled={saving} onFocus={() => setSelected(laugh.key)}
+                      onKeyDown={event => intensityKey(event, laugh)}>
+                      <span className={styles.intensityFill}
+                        style={{ height: `${intensity}%`, color: laughIntensityColor(laugh.intensityScore) }} />
+                    </div>
                     <button type="button" data-delete disabled={saving} className={styles.trash}
+                      data-side={leftGap > rightGap ? "left" : "right"}
                       aria-label={`Remove laugh ${index + 1} at ${preciseTime(laugh.start)}`}
                       onClick={() => {
                         setLaughs(current => current.filter(item => item.key !== laugh.key));
@@ -299,7 +400,7 @@ export function SetEditDialog(props: Props) {
                         setError("");
                         startButton.current?.focus();
                       }}><Trash2 size={14} aria-hidden="true" /></button>
-                    {(["start", "end"] as const).map(edge => laugh[edge] >= windowStart && laugh[edge] <= windowEnd &&
+                    {(["start", "end"] as const).map(edge => laugh[edge] >= playableStart && laugh[edge] <= playableEnd &&
                       <button key={edge} type="button" data-edge={edge} className={styles.handle} disabled={!canMark}
                         aria-label={`Resize laugh ${index + 1} ${edge}`} aria-keyshortcuts="ArrowLeft ArrowRight"
                         onFocus={() => setSelected(laugh.key)}
@@ -313,10 +414,10 @@ export function SetEditDialog(props: Props) {
                 })}
                 {preview && <div className={styles.preview}
                   style={{ left: `${percent(preview.start)}%`, width: `${percent(preview.end) - percent(preview.start)}%` }} />}
-                {currentTime >= windowStart && currentTime <= windowEnd &&
+                {(dragWindow === null || (currentTime >= windowStart && currentTime <= windowEnd)) &&
                   <span className={styles.playhead} style={{ left: `${percent(currentTime)}%` }} />}
               </div>
-              {props.lines.length > 0 && <p className="my-2 text-xs text-tf-ink-soft">Drag across the strip to add a laugh. Drag a red handle to resize.</p>}
+              {props.lines.length > 0 && <p className="my-2 text-xs text-tf-ink-soft">Drag to add or resize. Drag laughs up/down for intensity.</p>}
               <div className="flex items-center gap-1 sm:gap-2">
                 <Button ref={startButton} size="sm" variant="outline" className={styles.markButton}
                   disabled={!canMark} aria-keyshortcuts="I" onClick={markStart}>Start laugh (I)</Button>
@@ -401,7 +502,7 @@ const TranscriptFields = memo(function TranscriptFields({ lines, words, active, 
     {lines.map((line, index) => (
       <div key={line.index} ref={line.index === active ? activeRowRef : undefined}
         data-active={line.index === active} className={styles.line}>
-        <Button variant="outline" size="sm" className="px-2 font-mono tracking-normal" disabled={!canSeek}
+        <Button variant="outline" size="sm" className="px-2 font-mono tracking-normal transition-none hover:translate-x-0 hover:translate-y-0 hover:shadow-none" disabled={!canSeek}
           aria-label={`Jump to Line ${index + 1} at ${formatReviewTime(line.start)}`} onClick={() => seek(line.start)}>
           {formatReviewTime(line.start)}
         </Button>

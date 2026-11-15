@@ -1037,6 +1037,11 @@ describe("sets", () => {
           fileName: "cleaned-audio.wav", contentType: "audio/wav", isCanonical,
         });
       }
+      await ctx.db.insert("ingestArtifacts", {
+        ingestJobId, kind: "residualAudio", stepName: "preprocessLaughAudio",
+        path: "sets/current/laughter-residual.wav", fileName: "laughter-residual.wav",
+        contentType: "audio/wav", isCanonical: true,
+      });
       return setId;
     });
     const args = { setId };
@@ -1046,6 +1051,8 @@ describe("sets", () => {
         url: expect.stringContaining("/current/cleaned-audio.wav") }),
       expect.objectContaining({ kind: "cleanedAudio", isCanonical: false,
         url: expect.stringContaining("/superseded/cleaned-audio.wav") }),
+      expect.objectContaining({ kind: "residualAudio", isCanonical: true, isCurrentBreakdown: true,
+        url: expect.stringContaining("/current/laughter-residual.wav") }),
     ]));
     expect(await t.query(api.sets.listDevArtifacts, args)).toBeNull();
     for (const otherIdentity of [

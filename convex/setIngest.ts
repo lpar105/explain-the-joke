@@ -53,6 +53,7 @@ const ingestArtifactKindValidator = v.union(
   v.literal("playbackMedia"),
   v.literal("thumbnail"),
   v.literal("cleanedAudio"),
+  v.literal("residualAudio"),
   v.literal("scoreTrack"),
   v.literal("transcriptRaw"),
   v.literal("laughCandidatesRaw"),
@@ -649,6 +650,7 @@ export const getIngestJobContext = internalQuery({
     breakdownId: v.id("breakdowns"),
     setId: v.id("sets"),
     calibrationRequired: v.optional(v.boolean()),
+    laughAudioVersion: v.optional(v.literal("mossformer2-residual-v1")),
     workflowId: v.optional(v.string()),
   }),
   handler: async (ctx, args) => {
@@ -661,6 +663,7 @@ export const getIngestJobContext = internalQuery({
       breakdownId: ingestJob.breakdownId,
       setId: ingestJob.setId,
       calibrationRequired: ingestJob.calibrationRequired,
+      laughAudioVersion: ingestJob.laughAudioVersion,
       workflowId: ingestJob.workflowId,
     };
   },
@@ -1432,6 +1435,7 @@ async function runModalStepWithRetries(args: {
       | "thumbnail"
       | "scoreTrack"
       | "cleanedAudio"
+      | "residualAudio"
       | "transcriptRaw"
       | "laughCandidatesRaw";
   }>;
@@ -1614,6 +1618,7 @@ async function runLaughBranch(args: {
   ingestJobId: Id<"ingestJobs">;
   linesReady: Promise<void>;
   manualOnly?: boolean;
+  laughAudioVersion?: "mossformer2-residual-v1";
   step: WorkflowCtx;
 }) {
   try {
@@ -1625,9 +1630,10 @@ async function runLaughBranch(args: {
       outputArtifacts: [
         {
           contentType: "audio/wav",
-          fileName: "cleaned-audio.wav",
+          fileName: args.laughAudioVersion ? "speech-reconstruction.wav" : "cleaned-audio.wav",
           kind: "cleanedAudio",
         },
+        ...(args.laughAudioVersion ? [{ contentType: "audio/wav", fileName: "laughter-residual.wav", kind: "residualAudio" as const }] : []),
         ...(args.manualOnly ? [{ contentType: "application/json", fileName: "score-track.json", kind: "scoreTrack" as const }] : []),
       ],
       path: "laugh",
@@ -1811,6 +1817,7 @@ export const runSetIngest = workflow
           ingestJobId: args.ingestJobId,
           linesReady,
           manualOnly: context.calibrationRequired,
+          laughAudioVersion: context.laughAudioVersion,
           step,
         }),
       ]);

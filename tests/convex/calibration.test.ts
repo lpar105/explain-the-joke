@@ -50,6 +50,29 @@ async function archiveWords(f: Awaited<ReturnType<typeof prepared>>, words: Arra
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
 
 describe('calibration commitment and publication', () => {
+  it('fits the new residual score track and preserves manual marks', async () => {
+    const f = await prepared(65);
+    await f.t.run(ctx => ctx.db.patch(f.ingestJobId, { laughAudioVersion: 'mossformer2-residual-v1' }));
+    await f.asOwner.action(api.calibration.confirm, {
+      uploadSessionId: f.uploadSessionId, intervals: [{ start: 1, end: 2 }],
+    });
+    const scores = Array.from({ length: 1625 }, (_, index) =>
+      (index >= 25 && index < 50) || (index >= 1550 && index < 1575) ? 0.04 : 0.01,
+    );
+    const transcript = await archiveWords(f, [{ word: 'First', start: 0 }, { word: 'second', start: 61 }]);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({
+      version: 'spectral-difference-v1', preprocessingVersion: 'mossformer2-residual-v1',
+      retainedMediaKey: f.mediaKey, retainedMediaSha256: 'a'.repeat(64),
+      totalDuration: 65, frameSeconds: 0.04, intensityReference: 0.03, scores,
+    }))).mockResolvedValueOnce(transcript));
+
+    await f.t.action(internal.calibration.publishManual, { ingestJobId: f.ingestJobId });
+    expect(await f.asOwner.query(api.sets.getSetPageForViewer, { setId: f.setId })).toMatchObject({
+      breakdown: { laughSeedingState: 'ready' },
+      analysisData: { segments: [{ start_time: 1, end_time: 2 }, { start_time: 62, end_time: 63 }] },
+    });
+  });
+
   it('opens the saved Set before retained media or the Breakdown is ready', async () => {
     vi.useFakeTimers();
     const f = await prepared();

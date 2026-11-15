@@ -72,43 +72,37 @@ It currently:
 
 ## Laugh preprocessing implementation
 
-`preprocess_laugh_audio` is a deterministic ffmpeg-based cleanup pass.
+`preprocess_laugh_audio` extracts mono 48 kHz audio from `retainedMedia`. The
+Modal worker runs ClearVoice's `MossFormer2_SE_48K` speech enhancement model
+and aligns the reconstruction to the original by cross-correlation. It uploads
+`speech-reconstruction.wav` as `cleanedAudio` and the signed difference
+`original - reconstructed speech` as `laughter-residual.wav` (`residualAudio`).
+The Set's `/dev` page can switch between these recordings on the same timeline.
 
-It currently:
-
-- downloads the canonical `retainedMedia` artifact from Bunny
-- applies a high-pass filter
-- applies a low-pass filter
-- runs spectral denoising
-- normalizes loudness with a fixed target gain
-- writes a mono 16kHz WAV as `cleanedAudio`
-- uploads the cleaned audio artifact to Bunny
-- calls Convex back with the artifact metadata
+The worker image installs ClearVoice and downloads its pinned model checkpoint
+at build time. Existing jobs created with the original calibration contract
+continue to use their 16 kHz FFmpeg cleanup and RMS/ZCR score track.
 
 ## Laugh candidate detection implementation
 
-`detect_laugh_candidates` is currently a deterministic segmentation pass over the
-cleaned WAV.
+For jobs with a speech reconstruction, the detector compares the original and
+aligned reconstruction using Tight Five's per-frame normalized magnitude
+spectral difference. The automatic detector uses a 0.03 threshold and 0.7-second
+gap and duration settings. It weights candidates by the subtraction signal's
+RMS, spectral centroid and duration and publishes `laughCandidatesRaw`.
 
-It currently:
-
-- downloads the canonical `cleanedAudio` artifact from Bunny
-- measures short-window energy and zero-crossing activity
-- smooths the activity over time
-- thresholds the smoothed signal into candidate regions
-- merges short gaps and drops very short regions
-- writes a `laughCandidatesRaw` JSON payload containing:
-  - `sample_rate`
-  - `total_duration`
-  - `segments`
-- uploads the artifact to Bunny
-- calls Convex back with the artifact metadata
+The calibration path groups the spectral differences into 40 ms score bins and
+uses the manually marked sample to fit its cutoff for the rest of the Set. A Set
+that fits entirely in the marked sample uses the user's marks for its regions.
 
 ## Deploy
 
 ```bash
 modal deploy modal/ingest.py
 ```
+
+Deploy the Modal workers before deploying the Convex workflow that requests the
+new residual artifact.
 
 The workers mount the Modal secret named `custom-secret` by default. If you use a
 different Modal secret name, set `MODAL_SECRET_NAME` before deploy so the worker

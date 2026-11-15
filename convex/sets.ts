@@ -743,6 +743,7 @@ export const saveBreakdownEdits = mutation({
       index: v.union(v.number(), v.null()),
       start: v.number(),
       end: v.number(),
+      intensityScore: v.optional(v.number()),
     }))),
   },
   handler: async (ctx, args) => {
@@ -810,7 +811,7 @@ async function saveLaughEdits(
   breakdownId: Id<"breakdowns">,
   lines: Array<{ _id: Id<"lines">; startSeconds: number; text: string }>,
   duration: number,
-  laughs: Array<{ index: number | null; start: number; end: number }>,
+  laughs: Array<{ index: number | null; start: number; end: number; intensityScore?: number }>,
 ) {
   const originals = await ctx.db.query("laughRegions")
     .withIndex("by_breakdownId_and_ordinal", q => q.eq("breakdownId", breakdownId))
@@ -826,7 +827,7 @@ async function saveLaughEdits(
   let latestEnd = -Infinity;
   let latestChangedEnd = -Infinity;
   for (const laugh of sorted) {
-    const { index, start, end } = laugh;
+    const { index, start, end, intensityScore } = laugh;
     const original = index === null ? undefined : byIndex.get(index);
     if (index !== null) {
       if (!original || seen.has(index)) throw toConvexError("validation");
@@ -834,6 +835,7 @@ async function saveLaughEdits(
     }
     const changed = !original || start !== original.startSeconds || end !== original.endSeconds;
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start ||
+        (intensityScore !== undefined && (!Number.isFinite(intensityScore) || intensityScore < 0 || intensityScore > 1)) ||
         (changed && (start < 0 || end > duration)) ||
         start < (changed ? latestEnd : latestChangedEnd)) {
       throw toConvexError("validation");
@@ -842,7 +844,7 @@ async function saveLaughEdits(
     if (changed) latestChangedEnd = Math.max(latestChangedEnd, end);
     while (spokenLines[lineIndex + 1]?.startSeconds <= start) lineIndex++;
     const lineId = spokenLines[lineIndex]._id;
-    const region = { startSeconds: start, endSeconds: end, intensityScore: original?.intensityScore ?? 0.5 };
+    const region = { startSeconds: start, endSeconds: end, intensityScore: intensityScore ?? original?.intensityScore ?? 0.5 };
     const earlier = byLine.get(lineId);
     // Without another spoken Line between the starts, the marks form one Laugh Region.
     byLine.set(lineId, earlier
@@ -994,6 +996,7 @@ export const confirmUploadSession = mutation({
 
     const ingestJobId = await ctx.db.insert("ingestJobs", {
       calibrationRequired: true,
+      laughAudioVersion: "mossformer2-residual-v1",
       calibrationStatus: "pending",
       breakdownId,
       setId,

@@ -1,8 +1,32 @@
 import type { TranscriptSentence } from "./setAnalysis";
+import { clampTime } from "./trim-range";
+
+export function timingWindowAt(playhead: number, duration: number, length: number, origin: number) {
+  // Treat sub-microsecond differences at a page boundary as the same playback time.
+  const pageAt = (time: number) => {
+    const page = (time - origin) / length;
+    const nearest = Math.round(page);
+    return Math.abs(page - nearest) < 1e-6 / length ? nearest : page;
+  };
+  const first = Math.floor(pageAt(0));
+  const last = Math.max(first, Math.ceil(pageAt(duration)) - 1);
+  const page = clampTime(Math.floor(pageAt(playhead)), first, last);
+  const start = origin + page * length;
+  return { start, end: origin + (page + 1) * length, hasPrevious: page > first, hasNext: page < last };
+}
+
+export function zoomTimingWindow(playhead: number, start: number, oldLength: number, newLength: number) {
+  const playheadFraction = clampTime((playhead - start) / oldLength, 0, 1);
+  return { length: newLength, origin: playhead - playheadFraction * newLength };
+}
 
 export function formatReviewTime(seconds: number) {
   const whole = Math.floor(seconds);
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
+}
+
+export function laughIntensityColor(score: number) {
+  return `color-mix(in srgb, var(--tf-accent-red) ${30 + 70 * score}%, var(--tf-paper-alt))`;
 }
 
 export function reviewLaughs(lines: TranscriptSentence[]) {

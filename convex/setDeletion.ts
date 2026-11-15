@@ -224,7 +224,7 @@ export const getCleanupSnapshot = internalQuery({
           cleanupMuxPlayback: [],
           transcribeWords: ["transcript-raw.json"],
           normalizeLines: ["lines-normalized.json"],
-          preprocessLaughAudio: ["cleaned-audio.wav", "score-track.json"],
+          preprocessLaughAudio: ["cleaned-audio.wav", "speech-reconstruction.wav", "laughter-residual.wav", "score-track.json"],
           detectLaughCandidates: ["laugh-candidates-raw.json"],
           normalizeLaughRegions: ["laugh-regions-normalized.json"],
         }[attempt.stepName];

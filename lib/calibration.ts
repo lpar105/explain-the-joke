@@ -14,6 +14,22 @@ export const CALIBRATION_PROCESSING = {
   },
 } as const;
 
+export const RESIDUAL_CALIBRATION_PROCESSING = {
+  contract: 'manual-calibration-v1',
+  preprocessing: 'mossformer2-residual-v1',
+  detector: 'spectral-difference-v1',
+  fitting: 'duration-f0.5-v1',
+  settings: {
+    model: 'MossFormer2_SE_48K', sampleRate: 48000, channels: 1, pcmBits: 16,
+    fftSize: 2048, hopLength: 512, frameSeconds: 0.04, frameAggregation: 'max',
+    minimumSegmentSeconds: 0.28, gapFrames: 4, automaticMergeSeconds: 0.2,
+  },
+} as const;
+
+export function calibrationProcessing(laughAudioVersion?: typeof RESIDUAL_CALIBRATION_PROCESSING.preprocessing) {
+  return laughAudioVersion ? RESIDUAL_CALIBRATION_PROCESSING : CALIBRATION_PROCESSING;
+}
+
 export const CALIBRATION_SAMPLE_SECONDS = 60;
 
 export function constrainLaughMark(origin: number, target: number, sample: ManualInterval, marks: ManualInterval[]) {
@@ -59,8 +75,8 @@ export function validateManualSample(duration: number, intervals: ManualInterval
 }
 
 export type ScoreTrack = {
-  version: 'rms-zcr-v1';
-  preprocessingVersion: 'bandpass-afftdn-attenuation-v1';
+  version: typeof CALIBRATION_PROCESSING.detector | typeof RESIDUAL_CALIBRATION_PROCESSING.detector;
+  preprocessingVersion: typeof CALIBRATION_PROCESSING.preprocessing | typeof RESIDUAL_CALIBRATION_PROCESSING.preprocessing;
   retainedMediaKey: string;
   retainedMediaSha256: string;
   totalDuration: number;
@@ -147,13 +163,16 @@ function fitThreshold(track: ScoreTrack, duration: number, sample: ManualInterva
 }
 
 export function validateCalibrationTrack(track: ScoreTrack, duration: number) {
-  if (track.version !== CALIBRATION_PROCESSING.detector ||
-      track.preprocessingVersion !== CALIBRATION_PROCESSING.preprocessing ||
-      track.frameSeconds !== CALIBRATION_PROCESSING.settings.frameSeconds ||
+  const processing = calibrationProcessing(track.preprocessingVersion === RESIDUAL_CALIBRATION_PROCESSING.preprocessing
+    ? track.preprocessingVersion : undefined);
+  if (track.version !== processing.detector ||
+      track.preprocessingVersion !== processing.preprocessing ||
+      track.frameSeconds !== processing.settings.frameSeconds ||
       !Number.isFinite(track.totalDuration) || track.totalDuration <= 0 ||
       Math.abs(track.totalDuration - duration) > 0.05 ||
       !Number.isFinite(track.intensityReference) || track.intensityReference < 0 ||
-      track.scores.length !== Math.ceil(track.totalDuration / track.frameSeconds) ||
+      track.scores.length !== Math.ceil(Math.round(track.totalDuration * processing.settings.sampleRate) /
+        (track.frameSeconds * processing.settings.sampleRate)) ||
       track.scores.some(score => !Number.isFinite(score) || score < 0)) {
     throw new Error('Invalid calibration score track.');
   }

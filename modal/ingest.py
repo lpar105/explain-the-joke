@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import subprocess
 import tempfile
 import wave
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Literal
 from urllib import error as urlerror
@@ -25,6 +27,11 @@ IMAGE_PYTHON_PACKAGES = (
     "numpy==2.1.3",
     "requests==2.33.0",
 )
+LAUGH_SAMPLE_RATE = 48000
+LAUGH_FFT_SIZE = 2048
+LAUGH_HOP_LENGTH = 512
+LAUGH_MODEL = "MossFormer2_SE_48K"
+LAUGH_PREPROCESS_CPUS = 4
 WHISPER_CACHE = modal.Volume.from_name(
     "tight-five-whisper-cache",
     create_if_missing=True,
@@ -39,6 +46,23 @@ image = (
 
 app = modal.App("tight-five-ingest", image=image)
 
+# ClearVoice requires NumPy 1.x. Keep its dependencies out of the other workers.
+speech_image = (
+    modal.Image.debian_slim(python_version="3.11")
+    .apt_install("ffmpeg", "libgl1", "libglib2.0-0", "build-essential")
+    .pip_install(
+        "clearvoice==0.1.2", "numpy==1.26.4", "scipy==1.14.1",
+        "torch==2.6.0", "torchaudio==2.6.0", "torchvision==0.21.0",
+        "huggingface-hub==0.34.4",
+    )
+    .workdir("/opt/clearvoice")
+    .run_commands(
+        'python -c "from huggingface_hub import snapshot_download; '
+        f"snapshot_download('alibabasglab/{LAUGH_MODEL}', revision='eff8c97', "
+        f"local_dir='checkpoints/{LAUGH_MODEL}', allow_patterns='last_best_checkpoint*')\"",
+    )
+)
+
 
 @dataclass
 class Artifact:
@@ -50,6 +74,7 @@ class Artifact:
         "playbackMedia",
         "thumbnail",
         "cleanedAudio",
+        "residualAudio",
         "scoreTrack",
         "transcriptRaw",
         "laughCandidatesRaw",
@@ -225,6 +250,7 @@ def _expect_output_artifact(
         "playbackMedia",
         "thumbnail",
         "cleanedAudio",
+        "residualAudio",
         "scoreTrack",
         "transcriptRaw",
         "laughCandidatesRaw",
@@ -486,6 +512,9 @@ def _transcribe_words_impl(payload: WorkerPayload) -> list[Artifact]:
 
 
 def _preprocess_laugh_audio_impl(payload: WorkerPayload) -> list[Artifact]:
+    if any(artifact.kind == "residualAudio" for artifact in payload.outputArtifacts):
+        return _preprocess_residual_audio(payload)
+
     retained_artifact = _expect_input_artifact(payload, "retainedMedia")
     cleaned_artifact = _expect_output_artifact(payload, "cleanedAudio")
 
@@ -542,6 +571,153 @@ def _preprocess_laugh_audio_impl(payload: WorkerPayload) -> list[Artifact]:
         return outputs
 
 
+def _extract_laugh_wav(source: Path, destination: Path) -> None:
+    _run_ffmpeg([
+        "-hide_banner", "-loglevel", "error", "-y", "-i", str(source), "-vn",
+        "-ac", "1", "-ar", str(LAUGH_SAMPLE_RATE), "-c:a", "pcm_s16le", str(destination),
+    ])
+
+
+def _read_laugh_wav(path: Path):
+    import numpy as np
+
+    with wave.open(str(path), "rb") as audio:
+        if (audio.getframerate(), audio.getsampwidth(), audio.getnchannels()) != (LAUGH_SAMPLE_RATE, 2, 1):
+            raise RuntimeError("Expected mono 48 kHz PCM16 audio")
+        samples = np.frombuffer(audio.readframes(audio.getnframes()), dtype="<i2")
+    if not samples.size:
+        raise RuntimeError("Empty laugh audio")
+    return samples.astype(np.float32) / 32768
+
+
+def _write_laugh_wav(path: Path, samples) -> None:
+    import numpy as np
+
+    with wave.open(str(path), "wb") as audio:
+        audio.setparams((1, 2, LAUGH_SAMPLE_RATE, 0, "NONE", "not compressed"))
+        audio.writeframes(np.clip(np.rint(samples * 32768), -32768, 32767).astype("<i2").tobytes())
+
+
+@lru_cache(maxsize=1)
+def _speech_enhancer():
+    import torch
+    from clearvoice import ClearVoice
+
+    torch.set_num_threads(LAUGH_PREPROCESS_CPUS)
+    return ClearVoice(task="speech_enhancement", model_names=[LAUGH_MODEL])
+
+
+def _align_speech(original, speech):
+    import numpy as np
+    from scipy.signal import correlate, correlation_lags
+
+    # Match Tight Five's correlation alignment and keep the original timeline.
+    window = min(len(original), len(speech), 10 * LAUGH_SAMPLE_RATE)
+    reference, target = original[:window], speech[:window]
+    shift = 0
+    if np.any(reference) and np.any(target):
+        correlation = correlate(reference, target, method="fft")
+        lags = correlation_lags(window, window)
+        allowed = np.abs(lags) <= LAUGH_SAMPLE_RATE
+        shift = int(lags[allowed][np.argmax(correlation[allowed])])
+
+    aligned = np.zeros_like(original)
+    start = max(0, shift)
+    skip = max(0, -shift)
+    length = min(len(original) - start, len(speech) - skip)
+    aligned[start:start + length] = speech[skip:skip + length]
+    return aligned
+
+
+def _reconstruct_speech(original_path: Path, original):
+    import numpy as np
+
+    if not np.any(original):
+        return np.zeros_like(original)
+    # The model's feature extractor needs context even for a very short trim.
+    model_input = original_path
+    if len(original) < LAUGH_SAMPLE_RATE:
+        model_input = original_path.with_name("padded.wav")
+        _write_laugh_wav(model_input, np.pad(original, (0, LAUGH_SAMPLE_RATE - len(original))))
+
+    model_output = original_path.parent / "enhanced"
+    _speech_enhancer()(input_path=str(model_input), online_write=True, output_path=str(model_output))
+    model_wav = model_output / LAUGH_MODEL / model_input.name
+    return _align_speech(original, _read_laugh_wav(model_wav)[:len(original)])
+
+
+def _spectrum_batches(samples):
+    import numpy as np
+
+    padded = np.pad(samples, LAUGH_FFT_SIZE // 2)
+    frames = np.lib.stride_tricks.sliding_window_view(padded, LAUGH_FFT_SIZE)[::LAUGH_HOP_LENGTH]
+    window = np.hanning(LAUGH_FFT_SIZE + 1)[:-1].astype(np.float32)
+    for index in range(0, len(frames), 512):
+        yield np.abs(np.fft.rfft(frames[index:index + 512] * window, axis=1))
+
+
+def _spectral_difference(original, speech):
+    import numpy as np
+
+    scores = []
+    for raw, clean in zip(_spectrum_batches(original), _spectrum_batches(speech), strict=True):
+        raw /= raw.max(axis=1, keepdims=True) + 1e-8
+        clean /= clean.max(axis=1, keepdims=True) + 1e-8
+        scores.append(np.mean(np.abs(raw - clean), axis=1))
+    return np.concatenate(scores)
+
+
+def _residual_score_track(original, speech, retained_path: Path, retained_key: str) -> dict[str, Any]:
+    import numpy as np
+
+    scores = _spectral_difference(original, speech)
+    # Group native STFT frames into the 40 ms intervals used by calibration.
+    samples_per_frame = 1920
+    frame_count = (len(original) + samples_per_frame - 1) // samples_per_frame
+    bins = np.minimum(np.arange(len(scores)) * LAUGH_HOP_LENGTH // samples_per_frame, frame_count - 1)
+    grouped = np.zeros(frame_count)
+    np.maximum.at(grouped, bins, scores)
+    digest = hashlib.sha256()
+    with retained_path.open("rb") as retained:
+        for chunk in iter(lambda: retained.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "version": "spectral-difference-v1",
+        "preprocessingVersion": "mossformer2-residual-v1",
+        "retainedMediaKey": retained_key,
+        "retainedMediaSha256": digest.hexdigest(),
+        "totalDuration": len(original) / LAUGH_SAMPLE_RATE,
+        "frameSeconds": 0.04,
+        "intensityReference": 0.03,
+        "scores": grouped.tolist(),
+    }
+
+
+def _preprocess_residual_audio(payload: WorkerPayload) -> list[Artifact]:
+    retained = _expect_input_artifact(payload, "retainedMedia")
+    cleaned = _expect_output_artifact(payload, "cleanedAudio")
+    residual = _expect_output_artifact(payload, "residualAudio")
+    with tempfile.TemporaryDirectory(prefix="tight-five-modal-") as directory:
+        folder = Path(directory)
+        retained_path = _download_artifact(retained, folder / retained.fileName)
+        original_path = folder / "original.wav"
+        _extract_laugh_wav(retained_path, original_path)
+        original = _read_laugh_wav(original_path)
+        speech = _reconstruct_speech(original_path, original)
+        cleaned_path, residual_path = folder / cleaned.fileName, folder / residual.fileName
+        _write_laugh_wav(cleaned_path, speech)
+        _write_laugh_wav(residual_path, original - speech)
+
+        outputs = [(cleaned_path, cleaned), (residual_path, residual)]
+        if any(artifact.kind == "scoreTrack" for artifact in payload.outputArtifacts):
+            scores = _expect_output_artifact(payload, "scoreTrack")
+            score_path = folder / scores.fileName
+            track = _residual_score_track(original, speech, retained_path, retained.key)
+            score_path.write_text(json.dumps(track, allow_nan=False), encoding="utf-8")
+            outputs.append((score_path, scores))
+        return [_upload_to_bunny(path, artifact) for path, artifact in outputs]
+
+
 def _manual_score_track(cleaned_path: Path, retained_path: Path, retained_key: str) -> dict[str, Any]:
     """Score extraction only: no threshold fitting or automatic segmentation."""
     import numpy as np
@@ -577,6 +753,8 @@ def _detect_laugh_candidates_impl(payload: WorkerPayload) -> list[Artifact]:
     import numpy as np
 
     cleaned_artifact = _expect_input_artifact(payload, "cleanedAudio")
+    if cleaned_artifact.fileName == "speech-reconstruction.wav":
+        return _detect_residual_laughs(payload, cleaned_artifact)
     laugh_candidates_artifact = _expect_output_artifact(
         payload,
         "laughCandidatesRaw",
@@ -745,6 +923,64 @@ def _detect_laugh_candidates_impl(payload: WorkerPayload) -> list[Artifact]:
         return [_upload_to_bunny(candidates_path, laugh_candidates_artifact)]
 
 
+def _residual_laugh_segments(original, speech) -> list[dict[str, float]]:
+    import numpy as np
+
+    hop_seconds = LAUGH_HOP_LENGTH / LAUGH_SAMPLE_RATE
+    active = np.flatnonzero(_spectral_difference(original, speech) > 0.03)
+    if not active.size:
+        return []
+
+    frequencies = np.fft.rfftfreq(LAUGH_FFT_SIZE, 1 / LAUGH_SAMPLE_RATE)
+    segments = []
+    for group in np.split(active, np.flatnonzero(np.diff(active) * hop_seconds > 0.7) + 1):
+        start = int(group[0]) * LAUGH_HOP_LENGTH
+        end = min(len(original), (int(group[-1]) + 1) * LAUGH_HOP_LENGTH)
+        duration = (end - start) / LAUGH_SAMPLE_RATE
+        if duration < 0.7:
+            continue
+        residual = np.abs(original[start:end] - speech[start:end])
+        rms = float(np.sqrt(np.mean(residual ** 2)))
+        centroids = []
+        for spectrum in _spectrum_batches(residual):
+            centroids.extend((spectrum * frequencies).sum(axis=1) / np.maximum(spectrum.sum(axis=1), 1e-8))
+        intensity = rms * float(np.mean(centroids)) / 1000 * math.log1p(duration)
+        segments.append({
+            "start_time": round(start / LAUGH_SAMPLE_RATE, 6),
+            "end_time": round(end / LAUGH_SAMPLE_RATE, 6),
+            "duration": round(duration, 6),
+            "intensity_score": intensity,
+        })
+
+    peak = max((segment["intensity_score"] for segment in segments), default=0)
+    if peak <= 0:
+        return []
+    for segment in segments:
+        segment["intensity_score"] = round(segment["intensity_score"] / peak, 4)
+    return [segment for segment in segments if segment["intensity_score"] >= 0.05]
+
+
+def _detect_residual_laughs(payload: WorkerPayload, cleaned: Artifact) -> list[Artifact]:
+    retained = _expect_input_artifact(payload, "retainedMedia")
+    candidates = _expect_output_artifact(payload, "laughCandidatesRaw")
+    with tempfile.TemporaryDirectory(prefix="tight-five-modal-") as directory:
+        folder = Path(directory)
+        retained_path = _download_artifact(retained, folder / retained.fileName)
+        cleaned_path = _download_artifact(cleaned, folder / cleaned.fileName)
+        original_path = folder / "original.wav"
+        _extract_laugh_wav(retained_path, original_path)
+        original, speech = _read_laugh_wav(original_path), _read_laugh_wav(cleaned_path)
+        if len(original) != len(speech):
+            raise RuntimeError("Speech reconstruction does not match the retained audio duration")
+        candidates_path = folder / candidates.fileName
+        candidates_path.write_text(json.dumps({
+            "sample_rate": LAUGH_SAMPLE_RATE,
+            "total_duration": len(original) / LAUGH_SAMPLE_RATE,
+            "segments": _residual_laugh_segments(original, speech),
+        }, allow_nan=False), encoding="utf-8")
+        return [_upload_to_bunny(candidates_path, candidates)]
+
+
 def _not_implemented_impl(payload: WorkerPayload) -> list[Artifact]:
     raise RuntimeError(
         f"{payload.stepName} is scaffolded in Modal but not implemented yet.",
@@ -761,7 +997,7 @@ def transcribe_words(**raw_payload: Any) -> None:
     _run_worker(raw_payload, _transcribe_words_impl)
 
 
-@app.function(image=image, cpu=2, secrets=MODAL_SECRETS, timeout=60 * 20)
+@app.function(image=speech_image, cpu=LAUGH_PREPROCESS_CPUS, memory=8192, secrets=MODAL_SECRETS, timeout=60 * 60)
 def preprocess_laugh_audio(**raw_payload: Any) -> None:
     _run_worker(raw_payload, _preprocess_laugh_audio_impl)
 

@@ -1,6 +1,6 @@
 import { sendEvent, type WorkflowId } from '@convex-dev/workflow';
 import { v } from 'convex/values';
-import { CALIBRATION_PROCESSING, calibratedRegions, validateManualSample, type ManualInterval, type ScoreTrack } from '../lib/calibration';
+import { calibratedRegions, calibrationProcessing, validateManualSample, type ManualInterval, type ScoreTrack } from '../lib/calibration';
 import { toConvexError } from '../lib/errors';
 import { api, components, internal } from './_generated/api';
 import type { Id } from './_generated/dataModel';
@@ -18,7 +18,7 @@ type Snapshot = {
   intervals: ManualInterval[];
   labelRevision: number;
   labelHash: string;
-  processing: typeof CALIBRATION_PROCESSING;
+  processing: ReturnType<typeof calibrationProcessing>;
 };
 async function hash(value: string) {
   const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value));
@@ -34,7 +34,7 @@ export const contextForViewer = query({
     const set = await ctx.db.get(session.confirmedSetId);
     const job = await ctx.db.query('ingestJobs').withIndex('by_setId', q => q.eq('setId', session.confirmedSetId!)).unique();
     if (!set || !job?.calibrationRequired) throw toConvexError('not_found');
-    return { session, set };
+    return { session, set, laughAudioVersion: job.laughAudioVersion };
   },
 });
 
@@ -49,7 +49,7 @@ export const confirm = action({
     const snapshot: Snapshot = {
       duration, sample, intervals: args.intervals,
       labelRevision: 1, labelHash: await hash(JSON.stringify(args.intervals)),
-      processing: CALIBRATION_PROCESSING,
+      processing: calibrationProcessing(context.laughAudioVersion),
     };
     const json = JSON.stringify(snapshot);
     const inputId = await ctx.storage.store(new Blob([json], { type: 'application/json' }));
@@ -116,7 +116,8 @@ export const publishManual = internalAction({
     const json = await input.text();
     if (await hash(json) !== context.inputHash) throw new Error('Calibration input hash mismatch.');
     const snapshot = JSON.parse(json) as Snapshot;
-    if (JSON.stringify(snapshot.processing) !== JSON.stringify(CALIBRATION_PROCESSING)) throw new Error('Calibration processing version mismatch.');
+    const processing = calibrationProcessing(context.job.laughAudioVersion);
+    if (JSON.stringify(snapshot.processing) !== JSON.stringify(processing)) throw new Error('Calibration processing version mismatch.');
     const artifact = await ctx.runQuery(internal.setIngest.getCanonicalArtifact, { ...args, kind: 'scoreTrack' });
     const retained = await ctx.runQuery(internal.setIngest.getCanonicalArtifact, { ...args, kind: 'retainedMedia' });
     if (!artifact || !retained || (snapshot.retainedMedia && retained.key !== snapshot.retainedMedia.key)) {
@@ -126,6 +127,7 @@ export const publishManual = internalAction({
     if (!response.ok) throw new Error('Calibration score track unavailable.');
     const track = await response.json() as ScoreTrack;
     if (track.retainedMediaKey !== retained.key || !/^[a-f0-9]{64}$/.test(track.retainedMediaSha256)) throw new Error('Score track media mismatch.');
+    if (track.version !== processing.detector || track.preprocessingVersion !== processing.preprocessing) throw new Error('Calibration score version mismatch.');
     const lines = await ctx.runQuery(internal.sets.getBreakdownLinesInternal, { breakdownId: context.job.breakdownId });
     const { regions, fit } = calibratedRegions({
       duration: snapshot.duration, sampleStart: snapshot.sample.start, intervals: snapshot.intervals, track, lines,

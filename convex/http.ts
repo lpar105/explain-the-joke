@@ -43,6 +43,7 @@ type ModalCallbackPayload = {
       | "playbackMedia"
       | "thumbnail"
       | "cleanedAudio"
+      | "residualAudio"
       | "scoreTrack"
       | "transcriptRaw"
       | "laughCandidatesRaw"

@@ -219,7 +219,7 @@ _Avoid_: Trial grace window, billing retry
 > **Domain expert:** "No; headline metrics are derived from the current **Breakdown**, but the comic can edit the underlying **Laugh Regions**, including their intensity, so the metrics reflect corrected review data."
 >
 > **Dev:** "How is laugh intensity represented?"
-> **Domain expert:** "A **Laugh Region** stores a decimal intensity value under the hood, but the comic edits it using human-facing grades like A+, A, B, C, or F."
+> **Domain expert:** "A **Laugh Region** stores an intensity from 0 to 1. Comics adjust it on a shared percentage scale so they can compare Laugh Regions within a Set."
 >
 > **Dev:** "Can one **Set** contain multiple uploaded source files?"
 > **Domain expert:** "No; in v1 a **Set** is built from one contiguous uploaded video file."

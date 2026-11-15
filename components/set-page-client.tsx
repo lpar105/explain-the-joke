@@ -7,9 +7,9 @@ import Link from "next/link";
 
 import { api } from "../convex/_generated/api";
 import { getEffectivePathState } from "../lib/breakdown-progress";
-import { activeReviewLine, formatReviewTime as formatTime, laughNeighbors, reviewLaughs, strongestLines } from "../lib/set-review";
+import { activeReviewLine, formatReviewTime as formatTime, laughIntensityColor, laughNeighbors, reviewLaughs, strongestLines } from "../lib/set-review";
 import type { TranscriptSentence } from "../lib/setAnalysis";
-import { artifactType, DevCutoffControls, type SetArtifact, SetArtifactPreview, useDevCutoff } from "./set-dev-artifacts";
+import { artifactType, DevAudioComparison, DevCutoffControls, type SetArtifact, SetArtifactPreview, useDevCutoff } from "./set-dev-artifacts";
 import { SetEditDialog } from "./set-edit-dialog";
 import { Button } from "./ui/button";
 import { useSetPlayback } from "./use-set-playback";
@@ -17,14 +17,12 @@ import styles from "./set-page-client.module.css";
 
 const emptyLines: TranscriptSentence[] = [];
 
-function intensityColor(score: number) {
-  return `color-mix(in srgb, var(--tf-accent-red) ${30 + 70 * score}%, var(--tf-paper-alt))`;
-}
-
-export default function SetPageClient({ setId, devArtifacts: artifacts }: { setId: string; devArtifacts?: SetArtifact[] }) {
-  const dev = artifacts !== undefined;
+export default function SetPageClient({ setId, devArtifacts }: { setId: string; devArtifacts?: SetArtifact[] }) {
+  const dev = devArtifacts !== undefined;
   const { isLoading, isAuthenticated } = useConvexAuth();
   const set = useQuery(api.sets.getSetPageForViewer, !dev || isAuthenticated ? { setId } : "skip");
+  const liveArtifacts = useQuery(api.sets.listDevArtifacts, dev && isAuthenticated ? { setId } : "skip");
+  const artifacts = liveArtifacts === undefined ? devArtifacts : liveArtifacts ?? undefined;
   const cutoff = useDevCutoff(setId, artifacts);
   const [selection, setSelection] = useState("");
   const artifact = artifacts?.find((item) => item.id === selection);
@@ -190,6 +188,7 @@ export default function SetPageClient({ setId, devArtifacts: artifacts }: { setI
             </label>
             {artifact?.url && <a className="underline" href={artifact.url} target="_blank" rel="noreferrer">Open file</a>}
             {artifacts?.length === 0 && <span>No artifacts yet.</span>}
+            {artifacts && <DevAudioComparison artifacts={artifacts} selection={selection} onSelect={setSelection} />}
             <DevCutoffControls cutoff={cutoff} onChange={() => setNavigationTarget(null)} />
           </div>
         )}
@@ -240,7 +239,7 @@ export default function SetPageClient({ setId, devArtifacts: artifacts }: { setI
                 <span key={laugh.index} className="absolute inset-y-0 min-w-px" style={{
                   left: `${100 * laugh.start_time / duration}%`,
                   width: `${100 * laugh.duration / duration}%`,
-                  background: intensityColor(laugh.intensity_score),
+                  background: laughIntensityColor(laugh.intensity_score),
                 }} />
               ))}
             </div>

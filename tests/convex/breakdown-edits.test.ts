@@ -63,6 +63,28 @@ describe("Set review editor", () => {
     expect(await t.run(ctx => ctx.db.get(firstLine))).toMatchObject({ laughCount: 0, laughIntensityScore: 0 });
   });
 
+  it("saves an intensity-only edit and updates review metrics without changing the laugh timing", async () => {
+    const { owner, base } = await fixture();
+    expect(await owner.mutation(api.sets.saveBreakdownEdits, {
+      ...base, textEdits: [], laughs: [{ index: 1, start: 4, end: 6, intensityScore: 0 }],
+    })).toBe("saved");
+    const review = await owner.query(api.sets.getSetPageForViewer, { setId: base.setId });
+    expect(review?.breakdown).toMatchObject({ editRevision: 1, laughsEdited: true });
+    expect(review?.analysisData?.sentences[0]).toMatchObject({
+      laugh_count: 1,
+      laugh_intensity_score: 0,
+      laughs: [{ index: 1, start_time: 4, end_time: 6, intensity_score: 0 }],
+    });
+  });
+
+  it.each([-0.1, 1.1, NaN])("rejects an invalid laugh intensity of %s", async intensityScore => {
+    const { owner, t, base, laugh } = await fixture();
+    await expect(owner.mutation(api.sets.saveBreakdownEdits, {
+      ...base, textEdits: [], laughs: [{ index: 1, start: 4, end: 6, intensityScore }],
+    })).rejects.toMatchObject({ data: { code: "validation" } });
+    expect(await t.run(ctx => ctx.db.get(laugh))).toMatchObject({ intensityScore: 0.8 });
+  });
+
   it("blocks guest edits and stale drafts, and text-only saves preserve laughs", async () => {
     const { owner, guest, t, base, laugh, firstLine } = await fixture();
     const textEdits = [{ index: 1, text: "I made time." }];

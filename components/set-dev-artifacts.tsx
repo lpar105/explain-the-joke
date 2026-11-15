@@ -14,12 +14,39 @@ export type SetArtifact = NonNullable<FunctionReturnType<typeof api.sets.listDev
 
 export function artifactType(artifact: SetArtifact) {
   if (!artifact.url) return "unavailable";
-  if (artifact.kind === "retainedMedia" || artifact.kind === "cleanedAudio") {
+  if (artifact.kind === "cleanedAudio" || artifact.kind === "residualAudio") return "audio";
+  if (artifact.kind === "retainedMedia") {
     return artifact.contentType?.startsWith("video/") || /\.(mp4|webm|mov)$/i.test(artifact.fileName) ? "video" : "audio";
   }
   if (artifact.kind === "playbackMedia") return "video";
   if (artifact.kind === "thumbnail") return "image";
   return "json";
+}
+
+export function DevAudioComparison({ artifacts, selection, onSelect }: {
+  artifacts: SetArtifact[];
+  selection: string;
+  onSelect: (id: string) => void;
+}) {
+  const current = artifacts.filter(artifact => artifact.isCurrentBreakdown && artifact.isCanonical && artifact.url);
+  if (!current.some(artifact => artifact.kind === "residualAudio")) return null;
+
+  const sources = [
+    { kind: "retainedMedia", label: "Original" },
+    { kind: "cleanedAudio", label: "Reconstructed speech" },
+    { kind: "residualAudio", label: "Subtraction audio" },
+  ];
+  return (
+    <div role="group" aria-label="Compare laugh audio" className="flex flex-wrap items-center gap-2">
+      {sources.map(({ kind, label }) => {
+        const artifact = current.find(item => item.kind === kind);
+        return artifact && <Button key={kind} type="button" size="sm"
+          variant={selection === artifact.id ? "default" : "outline"}
+          className="h-7 px-2 tracking-normal" aria-pressed={selection === artifact.id}
+          onClick={() => onSelect(artifact.id)}>{label}</Button>;
+      })}
+    </div>
+  );
 }
 
 function jsonUrl(setId: string, artifact: SetArtifact | undefined) {

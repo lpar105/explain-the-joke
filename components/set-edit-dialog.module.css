@@ -45,6 +45,20 @@
   text-transform: uppercase;
 }
 
+.zoom {
+  display: grid;
+  justify-self: end;
+  width: min(100%, 7rem);
+  color: var(--tf-ink-soft);
+  font-size: 0.6875rem;
+}
+
+.zoom input {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--tf-accent-blue);
+}
+
 .strip {
   position: relative;
   height: 4.25rem;
@@ -55,12 +69,21 @@
   user-select: none;
 }
 
+.padding {
+  position: absolute;
+  inset-block: 0;
+  background: repeating-linear-gradient(135deg, #dedbd6 0 5px, #e9e6e2 5px 10px);
+  cursor: default;
+}
+
 .laugh, .preview {
   position: absolute;
   inset-block: 0;
   border: 1px solid #704e07;
   background: #ffd966d9;
 }
+
+.laugh { container-type: inline-size; }
 
 .laugh[data-selected="true"], .laugh:focus-within {
   z-index: 1;
@@ -93,7 +116,37 @@
 
 .trash:hover { background: #fff; }
 
+@container (width < 2.75rem) {
+  .trash[data-side="left"] {
+    left: auto;
+    right: calc(100% + 3px);
+    translate: 0 -50%;
+  }
+
+  .trash[data-side="right"] {
+    left: calc(100% + 3px);
+    translate: 0 -50%;
+  }
+}
+
 .markButton { min-width: 0; padding-inline: 0.5rem; white-space: normal; letter-spacing: normal; }
+
+.intensity {
+  position: absolute;
+  inset: 0;
+  cursor: ns-resize;
+}
+
+.intensityFill {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  background: color-mix(in srgb, currentColor 48%, transparent);
+  box-shadow: inset 0 2px currentColor;
+  pointer-events: none;
+}
+
+.intensity:focus-visible { outline: 2px solid var(--tf-accent-blue); outline-offset: -2px; }
 
 .handle {
   width: 0.875rem;

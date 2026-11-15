@@ -18,6 +18,7 @@ export function useSetPlayback(
   trimStart: number,
   trimEnd: number,
   initialTime = 0,
+  { frameUpdates = false } = {},
 ) {
   const mediaElement = useRef<HTMLMediaElement | null>(null);
   const [attachedNode, setAttachedNode] = useState<HTMLMediaElement | null>(null);
@@ -51,9 +52,16 @@ export function useSetPlayback(
     let playable = false;
     let failed = false;
     let disposed = false;
+    let frame: number | null = null;
+    const stopFrames = () => {
+      if (frame === null) return;
+      cancelAnimationFrame(frame);
+      frame = null;
+    };
     const update = (status: MediaStatus) => setMedia({ key, status, canSeek: playable });
     const fail = () => {
       failed = true;
+      stopFrames();
       element.pause();
       update("error");
     };
@@ -81,6 +89,7 @@ export function useSetPlayback(
       if (first && wantsPlay.current) resume();
     };
     const onWaiting = () => {
+      stopFrames();
       if (playable && !failed && (wantsPlay.current || element.seeking)) update("buffering");
     };
     const onTimeUpdate = () => {
@@ -92,8 +101,19 @@ export function useSetPlayback(
       position.current = clampTime(element.currentTime - start, 0, duration);
       setCurrentTime(position.current);
     };
-    const onPlaying = () => { if (!failed) update("ready"); };
+    const updateFrame = () => {
+      frame = null;
+      if (failed || disposed || element.paused || element.ended) return;
+      onTimeUpdate();
+      frame = requestAnimationFrame(updateFrame);
+    };
+    const onPlaying = () => {
+      if (failed) return;
+      update("ready");
+      if (frameUpdates && frame === null) frame = requestAnimationFrame(updateFrame);
+    };
     const onEnded = () => {
+      stopFrames();
       if (!playable || failed || !wantsPlay.current) return;
       element.currentTime = start;
       resume();
@@ -103,6 +123,7 @@ export function useSetPlayback(
     element.addEventListener("canplay", onCanPlay);
     element.addEventListener("waiting", onWaiting);
     element.addEventListener("playing", onPlaying);
+    element.addEventListener("pause", stopFrames);
     element.addEventListener("timeupdate", onTimeUpdate);
     element.addEventListener("ended", onEnded);
     element.addEventListener("error", fail);
@@ -118,10 +139,12 @@ export function useSetPlayback(
 
     return () => {
       disposed = true;
+      stopFrames();
       element.removeEventListener("loadedmetadata", onMetadata);
       element.removeEventListener("canplay", onCanPlay);
       element.removeEventListener("waiting", onWaiting);
       element.removeEventListener("playing", onPlaying);
+      element.removeEventListener("pause", stopFrames);
       element.removeEventListener("timeupdate", onTimeUpdate);
       element.removeEventListener("ended", onEnded);
       element.removeEventListener("error", fail);
@@ -129,7 +152,7 @@ export function useSetPlayback(
       element.removeAttribute("src");
       element.load();
     };
-  }, [attachedNode, key, url, mode, start, end, duration]);
+  }, [attachedNode, key, url, mode, start, end, duration, frameUpdates]);
 
   const seek = useCallback((time: number) => {
     if (!mediaElement.current || !canSeek) return;
