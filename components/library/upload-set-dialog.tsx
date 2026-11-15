@@ -46,7 +46,7 @@ import { Input } from "../ui/input";
 type UploadStep = "details" | "uploading" | "processing" | "trimming" | "calibrating";
 
 type DirectUploadResponse = {
-  uploadId: string;
+  uploadSessionId: Id<"uploadSessions">;
   uploadUrl: string | null;
 };
 
@@ -54,8 +54,10 @@ function isDirectUploadResponse(payload: unknown): payload is DirectUploadRespon
   return (
     typeof payload === "object" &&
     payload !== null &&
-    "uploadId" in payload &&
-    "uploadUrl" in payload
+    "uploadSessionId" in payload &&
+    typeof payload.uploadSessionId === "string" &&
+    "uploadUrl" in payload &&
+    (payload.uploadUrl === null || typeof payload.uploadUrl === "string")
   );
 }
 
@@ -75,7 +77,6 @@ function getDefaultSetTitleFromFileName(fileName: string) {
 
 export default function UploadSetDialog() {
   const router = useRouter();
-  const startUploadSession = useMutation(api.sets.startUploadSession);
   const confirmCalibration = useAction(api.calibration.confirm);
   const contact = useMutation(api.uploadLifecycle.contact);
   const discardSession = useMutation(api.sets.discardUploadSession);
@@ -88,7 +89,6 @@ export default function UploadSetDialog() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadSessionId, setUploadSessionId] =
     useState<Id<"uploadSessions"> | null>(null);
-  const [uploadId, setUploadId] = useState<string | null>(null);
   const [assetId, setAssetId] = useState<string | null>(null);
   const [playbackId, setPlaybackId] = useState<string | null>(null);
   const [hlsUrl, setHlsUrl] = useState<string | null>(null);
@@ -101,6 +101,8 @@ export default function UploadSetDialog() {
   const [startUploadNonce, setStartUploadNonce] = useState(0);
   const [uploaderKey, setUploaderKey] = useState(0);
   const savingRef = useRef(false);
+  const uploadGeneration = useRef(0);
+  useEffect(() => () => { uploadGeneration.current++; }, []);
   useEffect(() => { savingRef.current = isConfirming || isCleaningUp; }, [isConfirming, isCleaningUp]);
   const uploadSession = useQuery(
     api.sets.getUploadSessionForViewer,
@@ -219,12 +221,12 @@ export default function UploadSetDialog() {
   }, [step]);
 
   function resetFlow() {
+    uploadGeneration.current++;
     setStep("details");
     setTitle("");
     setSelectedFile(null);
     setLocalSource("");
     setUploadSessionId(null);
-    setUploadId(null);
     setAssetId(null);
     setPlaybackId(null);
     setHlsUrl(null);
@@ -239,7 +241,8 @@ export default function UploadSetDialog() {
   }
 
   async function cleanupTemporaryUploadAndClose() {
-    if (uploadSessionId === null && uploadId === null) {
+    uploadGeneration.current++;
+    if (uploadSessionId === null) {
       resetFlow();
       setOpen(false);
       return;
@@ -249,18 +252,7 @@ export default function UploadSetDialog() {
     setErrorMessage(null);
 
     try {
-      if (uploadSessionId !== null) {
-        await discardSession({ uploadSessionId });
-      } else if (uploadId !== null) {
-        const response = await fetch(`/api/mux/direct-uploads/${uploadId}`, {
-          method: "DELETE",
-        });
-        const payload = (await response.json()) as ApiErrorResponse;
-
-        if (!response.ok) {
-          throw new Error(getMessageFromApiErrorPayload(payload));
-        }
-      }
+      await discardSession({ uploadSessionId });
 
       resetFlow();
       setOpen(false);
@@ -288,7 +280,7 @@ export default function UploadSetDialog() {
     setStep("uploading");
     setSelectedFile(file);
 
-    let nextUploadId: string | null = null;
+    const generation = ++uploadGeneration.current;
     try {
       const response = await fetch("/api/mux/direct-uploads", {
         method: "POST",
@@ -297,6 +289,7 @@ export default function UploadSetDialog() {
         },
         body: JSON.stringify({
           contentType: file.type,
+          originalFileName: file.name,
         }),
       });
 
@@ -306,32 +299,21 @@ export default function UploadSetDialog() {
         throw new Error(getMessageFromApiErrorPayload(payload, "processing_unavailable"));
       }
 
-      if (!isDirectUploadResponse(payload) || !payload.uploadUrl) {
+      if (!isDirectUploadResponse(payload)) {
         throw new Error(getErrorMessageForCode("processing_unavailable"));
       }
 
-      const startedSession = await startUploadSession({
-        muxUploadId: payload.uploadId,
-        originalFileName: file.name,
-      });
-
-      nextUploadId = payload.uploadId;
-      setUploadSessionId(startedSession.uploadSessionId);
-      setUploadId(payload.uploadId);
-      return payload.uploadUrl;
-    } catch (error) {
-      if (nextUploadId !== null) {
-        try {
-          await fetch(`/api/mux/direct-uploads/${nextUploadId}`, {
-            method: "DELETE",
-          });
-        } catch {
-          // Leave cleanup to explicit modal close if the best-effort delete fails.
-        }
+      if (generation !== uploadGeneration.current || !payload.uploadUrl) {
+        // The session's expiry job still handles cleanup if this request fails.
+        await discardSession({ uploadSessionId: payload.uploadSessionId }).catch(() => {});
+        throw new Error(getErrorMessageForCode("processing_unavailable"));
       }
 
+      setUploadSessionId(payload.uploadSessionId);
+      return payload.uploadUrl;
+    } catch (error) {
+      if (generation !== uploadGeneration.current) throw error;
       setUploadSessionId(null);
-      setUploadId(null);
       setAssetId(null);
       setPlaybackId(null);
       setHlsUrl(null);

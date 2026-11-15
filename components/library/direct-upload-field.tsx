@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { createUpload, type UpChunk } from "@mux/upchunk";
+import { createUpload } from "@mux/upchunk";
 import {
   RefreshCcw,
   Upload,
@@ -36,7 +36,9 @@ export default function DirectUploadField(props: {
   startUploadNonce?: number;
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const uploadRef = useRef<UpChunk | null>(null);
+  const disposeUpload = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => disposeUpload.current?.(), []);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadState, setUploadState] = useState<UploadState>("idle");
   const [progressPercent, setProgressPercent] = useState(0);
@@ -57,6 +59,7 @@ export default function DirectUploadField(props: {
     setUploadState("uploading");
     setProgressPercent(0);
 
+    disposeUpload.current?.();
     const upload = createUpload({
       endpoint: () => props.getUploadEndpoint(file),
       file,
@@ -64,25 +67,39 @@ export default function DirectUploadField(props: {
       useLargeFileWorkaround: true,
     });
 
-    uploadRef.current = upload;
-
-    upload.on("progress", (event) => {
-      const nextProgress = Math.round((event as CustomEvent<number>).detail);
+    function onProgress(event: CustomEvent<number>) {
+      if (disposeUpload.current !== dispose) return;
+      const nextProgress = Math.round(event.detail);
       setProgressPercent(nextProgress);
       props.onUploadProgress?.(nextProgress);
-    });
+    }
 
-    upload.on("success", () => {
+    function onSuccess() {
+      if (disposeUpload.current !== dispose) return;
       setProgressPercent(100);
       props.onUploadProgress?.(100);
       setUploadState("processing");
       props.onUploadSuccess();
-    });
+    }
 
-    upload.on("error", () => {
+    function onError() {
+      if (disposeUpload.current !== dispose) return;
       setUploadState("error");
       props.onUploadError(getErrorMessageForCode("processing_unavailable"));
-    });
+    }
+
+    function dispose() {
+      disposeUpload.current = null;
+      upload.off("progress", onProgress);
+      upload.off("success", onSuccess);
+      upload.off("error", onError);
+      upload.abort();
+    }
+
+    disposeUpload.current = dispose;
+    upload.on("progress", onProgress);
+    upload.on("success", onSuccess);
+    upload.on("error", onError);
   }
 
   function handleFiles(files: FileList | null) {
@@ -98,7 +115,7 @@ export default function DirectUploadField(props: {
     }
 
     setIsDragActive(false);
-    uploadRef.current?.abort();
+    disposeUpload.current?.();
     setSelectedFile(file);
     setUploadState("idle");
     setProgressPercent(0);
@@ -137,7 +154,6 @@ export default function DirectUploadField(props: {
       return;
     }
 
-    uploadRef.current?.abort();
     beginUpload(selectedFile);
   }
 

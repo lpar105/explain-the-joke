@@ -618,8 +618,36 @@ export const attachModalCallToAttempt = internalMutation({
     modalFunctionCallId: v.string(),
   },
   handler: async (ctx, args) => {
+    const attempt = await ctx.db.get(args.attemptId);
+    if (!attempt) return;
+
     await ctx.db.patch(args.attemptId, {
       modalFunctionCallId: args.modalFunctionCallId,
+    });
+    if (attempt.status !== "running") return;
+
+    // Modal allows up to 60 minutes for audio preprocessing and 20 for other
+    // workers. Allow another five minutes for startup and callback delivery.
+    const minutes = attempt.stepName === "preprocessLaughAudio" ? 65 : 25;
+    await ctx.scheduler.runAfter(minutes * 60_000, internal.setIngest.expireModalStepAttempt, {
+      attemptId: args.attemptId,
+    });
+  },
+});
+
+export const expireModalStepAttempt = internalMutation({
+  args: { attemptId: v.id("ingestStepAttempts") },
+  handler: async (ctx, { attemptId }) => {
+    const attempt = await ctx.db.get(attemptId);
+    if (!attempt || attempt.status !== "running" || attempt.runner !== "modal") return;
+
+    await ctx.runMutation(internal.setIngest.reportModalStepResult, {
+      attemptNumber: attempt.attemptNumber,
+      failureCode: "external_worker_failed",
+      failureDetail: "The Modal worker did not report completion before its deadline.",
+      ingestJobId: attempt.ingestJobId,
+      outcome: "failed",
+      stepName: attempt.stepName,
     });
   },
 });

@@ -7,7 +7,7 @@ const setStatusValidator = v.union(
   v.literal("unavailable"),
 );
 
-const lineSeedingStateValidator = v.union(
+export const lineSeedingStateValidator = v.union(
   v.literal("pending"),
   v.literal("running"),
   v.literal("retrying"),
@@ -28,7 +28,7 @@ const breakdownEditabilityValidator = v.union(
   v.literal("editable"),
 );
 
-const ingestJobStatusValidator = v.union(
+export const ingestJobStatusValidator = v.union(
   v.literal("pending"),
   v.literal("running"),
   v.literal("completed"),
@@ -53,6 +53,8 @@ const ingestStepStatusValidator = v.union(
   v.literal("succeeded"),
   v.literal("failed"),
 );
+
+const calibrationErrorCodeValidator = v.literal("calibration_processing_failed");
 
 const ingestStepRunnerValidator = v.union(
   v.literal("convex"),
@@ -181,8 +183,8 @@ export default defineSchema({
     calibrationInputId: v.optional(v.id("_storage")),
     calibrationInputHash: v.optional(v.string()),
     calibrationResultId: v.optional(v.id("_storage")),
-    calibrationStatus: v.optional(v.union(v.literal("pending"), v.literal("running"), v.literal("succeeded"), v.literal("failed"))),
-    calibrationErrorCode: v.optional(v.string()),
+    calibrationStatus: v.optional(ingestStepStatusValidator),
+    calibrationErrorCode: v.optional(calibrationErrorCodeValidator),
     calibrationRetryable: v.optional(v.boolean()),
     playbackWorkflowId: v.optional(v.string()),
     workflowId: v.optional(v.string()),

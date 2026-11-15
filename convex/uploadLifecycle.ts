@@ -7,7 +7,8 @@ import { toConvexError } from '../lib/errors';
 export const CONTACT_TIMEOUT_MS = 300_000;
 
 export async function abandonUpload(ctx: MutationCtx, session: Doc<'uploadSessions'>) {
-  if (session.status === 'confirmed' || session.status === 'discarded') return;
+  if (session.status === 'confirmed') return false;
+  if (session.status === 'discarded') return true;
   await ctx.db.patch(session._id, { status: 'discarded' });
   if (session.confirmedSetId) {
     const existing = await ctx.db.query('setDeletionJobs')
@@ -23,6 +24,7 @@ export async function abandonUpload(ctx: MutationCtx, session: Doc<'uploadSessio
       uploadSessionId: session._id,
     });
   }
+  return true;
 }
 
 export const contact = mutation({

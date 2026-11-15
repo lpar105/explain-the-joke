@@ -4,13 +4,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api, internal } from "../../convex/_generated/api";
 import { createConvexTest } from "./test.setup";
 
-async function seedSetGraph() {
-  const t = createConvexTest();
+async function seedSetGraph(t = createConvexTest(), name = "delete") {
   const ids = await t.run(async (ctx) => {
     const setId = await ctx.db.insert("sets", {
       ownerTokenIdentifier: "clerk:owner",
       setStatus: "playable",
-      title: "Delete Me",
+      title: name,
       trimRangeEndSeconds: 60,
       trimRangeStartSeconds: 0,
     });
@@ -64,22 +63,22 @@ async function seedSetGraph() {
     await ctx.db.insert("playbackSources", {
       isActive: true,
       kind: "temporary",
-      playbackId: "playback_delete",
+      playbackId: `playback_${name}`,
       provider: "mux",
-      providerAssetId: "asset_delete",
-      providerUploadId: "upload_delete",
+      providerAssetId: `asset_${name}`,
+      providerUploadId: `upload_${name}`,
       setId,
     });
     const uploadSessionId = await ctx.db.insert("uploadSessions", {
       confirmedSetId: setId,
-      muxAssetId: "asset_delete",
-      muxPlaybackId: "playback_delete",
-      muxUploadId: "upload_delete",
+      muxAssetId: `asset_${name}`,
+      muxPlaybackId: `playback_${name}`,
+      muxUploadId: `upload_${name}`,
       originalFileName: "delete.mp4",
       ownerTokenIdentifier: "clerk:owner",
       status: "confirmed",
     });
-    return { breakdownId, ingestJobId, setId, uploadSessionId };
+    return { attemptId, breakdownId, ingestJobId, setId, uploadSessionId };
   });
 
   return { ids, t };
@@ -87,6 +86,7 @@ async function seedSetGraph() {
 
 describe("Set deletion", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
@@ -109,6 +109,7 @@ describe("Set deletion", () => {
     ).rejects.toBeInstanceOf(ConvexError);
 
     await asOwner.mutation(api.setDeletion.requestDeletion, { setId: ids.setId });
+    await expect(asOwner.mutation(api.setDeletion.requestDeletion, { setId: ids.setId })).resolves.toBeNull();
 
     expect(await asOwner.query(api.sets.listForViewer)).toEqual([]);
     const state = await t.run(async (ctx) => ({
@@ -125,8 +126,23 @@ describe("Set deletion", () => {
     });
   });
 
-  it("deletes every current Convex child in bounded batches and leaves no ledger", async () => {
+  it("deletes only the target Set graph in bounded batches and leaves no ledger", async () => {
     const { ids, t } = await seedSetGraph();
+    await seedSetGraph(t, "keep");
+    const getGraphs = () => t.run(async (ctx) => ({
+      artifacts: await ctx.db.query("ingestArtifacts").take(3),
+      attempts: await ctx.db.query("ingestStepAttempts").take(3),
+      breakdowns: await ctx.db.query("breakdowns").take(3),
+      jobs: await ctx.db.query("ingestJobs").take(3),
+      laughs: await ctx.db.query("laughRegions").take(3),
+      lines: await ctx.db.query("lines").take(3),
+      playback: await ctx.db.query("playbackSources").take(3),
+      sets: await ctx.db.query("sets").take(3),
+      uploads: await ctx.db.query("uploadSessions").take(3),
+    }));
+    const before = await getGraphs();
+    expect(Object.values(before).map(rows => rows.length)).toEqual(Array(9).fill(2));
+
     const asOwner = t.withIdentity({
       issuer: "https://clerk.dev",
       subject: "owner",
@@ -151,28 +167,11 @@ describe("Set deletion", () => {
     }
     await t.mutation(internal.setDeletion.finishDeletion, { deletionJobId });
 
-    const remaining = await t.run(async (ctx) => ({
-      artifacts: await ctx.db.query("ingestArtifacts").take(1),
-      attempts: await ctx.db.query("ingestStepAttempts").take(1),
-      breakdowns: await ctx.db.query("breakdowns").take(1),
-      jobs: await ctx.db.query("ingestJobs").take(1),
-      laughs: await ctx.db.query("laughRegions").take(1),
-      lines: await ctx.db.query("lines").take(1),
-      playback: await ctx.db.query("playbackSources").take(1),
-      ledger: await ctx.db.query("setDeletionJobs").take(1),
-      uploads: await ctx.db.query("uploadSessions").take(1),
-    }));
-    expect(remaining).toEqual({
-      artifacts: [],
-      attempts: [],
-      breakdowns: [],
-      jobs: [],
-      laughs: [],
-      lines: [],
-      playback: [],
-      ledger: [],
-      uploads: [],
-    });
+    const after = await getGraphs();
+    for (const table of Object.keys(before) as Array<keyof typeof before>) {
+      expect(after[table]).toEqual(before[table].slice(1));
+    }
+    expect(await t.run(ctx => ctx.db.query("setDeletionJobs").take(1))).toEqual([]);
   });
 
   it("deletes Mux assets, the Bunny prefix, and the Bunny CDN cache", async () => {
@@ -234,12 +233,15 @@ describe("Set deletion", () => {
   });
 
   it("ignores a late Modal callback after deletion begins", async () => {
+    vi.useFakeTimers();
     const { ids, t } = await seedSetGraph();
     const asOwner = t.withIdentity({
       issuer: "https://clerk.dev",
       subject: "owner",
       tokenIdentifier: "clerk:owner",
     });
+    await t.run(ctx => ctx.db.patch(ids.attemptId, { status: "running" }));
+    const lateKey = `set-ingest/${ids.setId}/${ids.breakdownId}/late.json`;
     await asOwner.mutation(api.setDeletion.requestDeletion, { setId: ids.setId });
 
     await expect(
@@ -248,7 +250,7 @@ describe("Set deletion", () => {
           {
             fileName: "late.json",
             isCanonical: true,
-            key: `set-ingest/${ids.setId}/${ids.breakdownId}/late.json`,
+            key: lateKey,
             kind: "transcriptRaw",
           },
         ],
@@ -266,5 +268,10 @@ describe("Set deletion", () => {
         .take(10),
     );
     expect(artifacts).toHaveLength(1);
+    const scheduled = await t.run(ctx => ctx.db.system.query("_scheduled_functions").take(10));
+    expect(scheduled).toContainEqual(expect.objectContaining({
+      name: "setDeletion:cleanupLateArtifacts",
+      args: [{ keys: [lateKey] }],
+    }));
   });
 });

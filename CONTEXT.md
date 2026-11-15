@@ -13,15 +13,15 @@ The current editable analysis artifact for a set.
 _Avoid_: Revision, pass, version, report
 
 **Line**:
-A timed unit in the Breakdown transcript that contains at least one spoken word and that the comic can review, click, and edit in sync with playback. A Line can own at most one Laugh Region.
+A timed unit of spoken words in the Breakdown transcript.
 _Avoid_: Sentence, utterance
 
 **Laugh Region**:
-A timed audience-laughter event owned by the Line active at its start. Consecutive laughs without intervening transcript words form one Laugh Region.
+A timed audience-laughter event associated with a Line.
 _Avoid_: Reaction, laugh marker, applause block
 
 **Calibration Sample**:
-A user-selected continuous minute within a set's retained media, or the entire retained set when shorter, with every audience-laughter interval manually marked and the remaining time identified as non-laughter, used to calibrate laughter detection for that set. A usable sample contains both laughter and non-laughter; laughter crossing its boundaries is marked only within the sample.
+A manually labeled excerpt of a Set used to calibrate laughter detection for that Set.
 _Avoid_: Training set, room profile
 
 **Share Link**:
@@ -218,9 +218,6 @@ _Avoid_: Trial grace window, billing retry
 > **Dev:** "Are headline metrics edited directly?"
 > **Domain expert:** "No; headline metrics are derived from the current **Breakdown**, but the comic can edit the underlying **Laugh Regions**, including their intensity, so the metrics reflect corrected review data."
 >
-> **Dev:** "How is laugh intensity represented?"
-> **Domain expert:** "A **Laugh Region** stores an intensity from 0 to 1. Comics adjust it on a shared percentage scale so they can compare Laugh Regions within a Set."
->
 > **Dev:** "Can one **Set** contain multiple uploaded source files?"
 > **Domain expert:** "No; in v1 a **Set** is built from one contiguous uploaded video file."
 >
@@ -238,9 +235,6 @@ _Avoid_: Trial grace window, billing retry
 >
 > **Dev:** "Can a **Bit** exist before it is linked to any performed material?"
 > **Domain expert:** "No; a **Bit** comes into existence from real performed **Chapters**, not as a standalone idea with no set history."
->
-> **Dev:** "What happens during silence between spoken moments?"
-> **Domain expert:** "The current **Line** remains active until the next **Line** starts. Consecutive laughs with no spoken words between them form one **Laugh Region**. A **Set** with no spoken words has no **Laugh Regions**."
 >
 > **Dev:** "Who can make a **Comment Thread** private?"
 > **Domain expert:** "Only the comedian who owns the **Set** can switch a **Comment Thread** between shared and private visibility."

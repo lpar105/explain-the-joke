@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { internal } from "../../convex/_generated/api";
 import { createConvexTest } from "./test.setup";
@@ -57,6 +57,46 @@ describe("set ingest attempts", () => {
 
     const set = await t.run((ctx) => ctx.db.get(ids.setId));
     expect(set?.thumbnailStorageKey).toBe(thumbnailStorageKey);
+  });
+
+  it("fails a silent Modal attempt at its deadline and ignores a late success", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = createConvexTest();
+      const ingestJobId = await t.run(async (ctx) => {
+        const setId = await ctx.db.insert("sets", {
+          ownerTokenIdentifier: "clerk:owner",
+          setStatus: "playable",
+          title: "Worker deadline",
+          trimRangeStartSeconds: 0,
+          trimRangeEndSeconds: 60,
+        });
+        const breakdownId = await ctx.db.insert("breakdowns", {
+          setId,
+          editability: "locked",
+          lineSeedingState: "pending",
+          laughSeedingState: "pending",
+        });
+        return ctx.db.insert("ingestJobs", { setId, breakdownId, status: "running" });
+      });
+      const stepName = "prepareRetainedMedia" as const;
+      const { attemptId, attemptNumber } = await t.mutation(internal.setIngest.beginStepAttempt, {
+        ingestJobId, runner: "modal", stepName, workflowEventName: "prepareRetainedMedia:1",
+      });
+
+      await t.mutation(internal.setIngest.attachModalCallToAttempt, { attemptId, modalFunctionCallId: "modal-call" });
+      await vi.advanceTimersByTimeAsync(24 * 60_000);
+      expect(await t.run(ctx => ctx.db.get(attemptId))).toMatchObject({ status: "running" });
+      await vi.advanceTimersByTimeAsync(60_000);
+      await t.finishInProgressScheduledFunctions();
+
+      const failed = await t.run(ctx => ctx.db.get(attemptId));
+      expect(failed).toMatchObject({ status: "failed", failureCode: "external_worker_failed" });
+      await t.mutation(internal.setIngest.reportModalStepResult, { ingestJobId, stepName, attemptNumber, outcome: "succeeded" });
+      expect(await t.run(ctx => ctx.db.get(attemptId))).toEqual(failed);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("finalizes a Modal spawn failure instead of leaving the attempt running", async () => {

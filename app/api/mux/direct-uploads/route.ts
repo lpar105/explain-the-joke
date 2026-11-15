@@ -1,28 +1,30 @@
 import { auth } from "@clerk/nextjs/server";
+import { fetchAction } from "convex/nextjs";
 
+import { api } from "../../../../convex/_generated/api";
 import {
   logServerError,
   toApiErrorResponseBody,
 } from "../../../../lib/errors";
-import { createMuxDirectUpload } from "../../../../lib/mux";
 
-type CreateDirectUploadRequestBody = {
-  contentType?: string;
-};
-
-function isVideoContentType(contentType: string | undefined) {
-  return contentType?.startsWith("video/") ?? false;
+function isCreateDirectUploadBody(
+  body: unknown,
+): body is { contentType: string; originalFileName?: string } {
+  return typeof body === "object" && body !== null &&
+    "contentType" in body && typeof body.contentType === "string" &&
+    body.contentType.startsWith("video/") &&
+    (!("originalFileName" in body) || typeof body.originalFileName === "string");
 }
 
 export async function POST(request: Request) {
-  const { userId } = await auth();
+  const { getToken, userId } = await auth();
 
   if (!userId) {
     return Response.json({ code: "auth" }, { status: 401 });
   }
 
-  const body = (await request.json()) as CreateDirectUploadRequestBody;
-  if (!isVideoContentType(body.contentType)) {
+  const body: unknown = await request.json().catch(() => null);
+  if (!isCreateDirectUploadBody(body)) {
     return Response.json(
       { code: "validation" },
       { status: 400 },
@@ -30,14 +32,15 @@ export async function POST(request: Request) {
   }
 
   try {
-    const upload = await createMuxDirectUpload({
-      corsOrigin: request.headers.get("origin") ?? new URL(request.url).origin,
-    });
+    const token = await getToken();
+    if (!token) return Response.json({ code: "auth" }, { status: 401 });
 
-    return Response.json({
-      uploadId: upload.id,
-      uploadUrl: upload.url ?? null,
-    });
+    const upload = await fetchAction(api.sets.createDirectUpload, {
+      corsOrigin: request.headers.get("origin") ?? new URL(request.url).origin,
+      originalFileName: body.originalFileName ?? "",
+    }, { token });
+
+    return Response.json(upload);
   } catch (error) {
     const apiError = toApiErrorResponseBody(error, "internal");
     logServerError("Could not create a Mux direct upload.", error, {

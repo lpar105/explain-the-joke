@@ -2,11 +2,22 @@ import { BunnyStorage } from "convex-bunny";
 
 import { components } from "./_generated/api";
 
+function requireBunnyEnv(name: "BUNNY_STORAGE_ZONE" | "BUNNY_API_KEY" | "BUNNY_CDN_HOSTNAME") {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing ${name} in the Convex environment.`);
+  return value;
+}
+
+const storageZone = requireBunnyEnv("BUNNY_STORAGE_ZONE");
+const apiKey = requireBunnyEnv("BUNNY_API_KEY");
+const cdnHostname = requireBunnyEnv("BUNNY_CDN_HOSTNAME");
+const region = process.env.BUNNY_REGION ?? "default";
+
 export const bunnyStorage = new BunnyStorage(components.bunny, {
-  storageZone: process.env.BUNNY_STORAGE_ZONE ?? "test-zone",
-  apiKey: process.env.BUNNY_API_KEY ?? "test-api-key",
-  cdnHostname: process.env.BUNNY_CDN_HOSTNAME ?? "test.b-cdn.net",
-  region: process.env.BUNNY_REGION ?? "default",
+  storageZone,
+  apiKey,
+  cdnHostname,
+  region,
 });
 
 export function getBunnyArtifactCdnUrl(key: string) {
@@ -14,15 +25,15 @@ export function getBunnyArtifactCdnUrl(key: string) {
 }
 
 export function getBunnyStorageZone() {
-  return process.env.BUNNY_STORAGE_ZONE ?? "test-zone";
+  return storageZone;
 }
 
 export function getBunnyStorageApiKey() {
-  return process.env.BUNNY_API_KEY ?? "test-api-key";
+  return apiKey;
 }
 
 export function getBunnyStorageRegion() {
-  return process.env.BUNNY_REGION ?? "default";
+  return region;
 }
 
 export function getBunnyStorageHostname(region = getBunnyStorageRegion()) {

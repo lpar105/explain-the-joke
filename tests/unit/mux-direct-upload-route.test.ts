@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
   cancelMuxDirectUpload: vi.fn(),
-  createMuxDirectUpload: vi.fn(),
+  fetchAction: vi.fn(),
   deleteMuxAsset: vi.fn(),
   fetchMutation: vi.fn(),
   fetchQuery: vi.fn(),
@@ -18,13 +18,13 @@ vi.mock("@clerk/nextjs/server", () => ({
 }));
 
 vi.mock("convex/nextjs", () => ({
+  fetchAction: mocks.fetchAction,
   fetchMutation: mocks.fetchMutation,
   fetchQuery: mocks.fetchQuery,
 }));
 
 vi.mock("../../lib/mux", () => ({
   cancelMuxDirectUpload: mocks.cancelMuxDirectUpload,
-  createMuxDirectUpload: mocks.createMuxDirectUpload,
   deleteMuxAsset: mocks.deleteMuxAsset,
   getMuxAsset: mocks.getMuxAsset,
   getMuxDirectUpload: mocks.getMuxDirectUpload,
@@ -71,15 +71,16 @@ describe("Mux direct-upload cleanup route", () => {
       ownerTokenIdentifier: "issuer|user_123",
       status: "waitingForUpload",
     });
-    mocks.fetchMutation.mockResolvedValue(null);
+    mocks.fetchMutation.mockResolvedValue({ canCleanUp: true });
     mocks.getMuxDirectUpload.mockResolvedValue({
       id: uploadId,
       status: "waiting",
     });
     mocks.cancelMuxDirectUpload.mockResolvedValue(undefined);
-    mocks.createMuxDirectUpload.mockResolvedValue({
-      id: uploadId,
-      url: "https://storage.mux.com/direct-upload",
+    mocks.fetchAction.mockResolvedValue({
+      uploadId,
+      uploadSessionId,
+      uploadUrl: "https://storage.mux.com/direct-upload",
     });
   });
 
@@ -88,7 +89,7 @@ describe("Mux direct-upload cleanup route", () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toEqual({ code: "validation" });
-    expect(mocks.createMuxDirectUpload).not.toHaveBeenCalled();
+    expect(mocks.fetchAction).not.toHaveBeenCalled();
   });
 
   it("creates direct uploads for video files", async () => {
@@ -97,11 +98,13 @@ describe("Mux direct-upload cleanup route", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({
       uploadId,
+      uploadSessionId,
       uploadUrl: "https://storage.mux.com/direct-upload",
     });
-    expect(mocks.createMuxDirectUpload).toHaveBeenCalledWith({
+    expect(mocks.fetchAction).toHaveBeenCalledWith(expect.anything(), {
       corsOrigin: "http://localhost",
-    });
+      originalFileName: "",
+    }, { token: "clerk-session-token" });
   });
 
   it("uses Clerk's native session token and discards the Convex upload session", async () => {
@@ -116,6 +119,27 @@ describe("Mux direct-upload cleanup route", () => {
       { token: "clerk-session-token" },
     );
     expect(mocks.cancelMuxDirectUpload).toHaveBeenCalledWith(uploadId);
+  });
+
+  it.each(["null", '{"contentType":17}', "{"])("rejects malformed request body %s", async (body) => {
+    const response = await POST(new Request("http://localhost/api/mux/direct-uploads", {
+      method: "POST",
+      body,
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ code: "validation" });
+    expect(mocks.fetchAction).not.toHaveBeenCalled();
+  });
+
+  it("leaves the Mux asset alone when discard says the session is confirmed", async () => {
+    mocks.fetchMutation.mockResolvedValue({ canCleanUp: false });
+    const response = await deleteRequest();
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ deletedAssetId: null, uploadId });
+    expect(mocks.getMuxDirectUpload).not.toHaveBeenCalled();
+    expect(mocks.deleteMuxAsset).not.toHaveBeenCalled();
   });
 
   it("returns a controlled internal error when Clerk token retrieval fails", async () => {
@@ -137,6 +161,7 @@ describe("Mux direct-upload cleanup route", () => {
     const callOrder: string[] = [];
     mocks.fetchMutation.mockImplementation(async () => {
       callOrder.push("discard-session");
+      return { canCleanUp: true };
     });
     mocks.getMuxDirectUpload.mockImplementation(async () => {
       callOrder.push("load-mux-upload");

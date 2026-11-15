@@ -1,16 +1,8 @@
-export type BreakdownPathState =
-  | "pending"
-  | "running"
-  | "retrying"
-  | "ready"
-  | "failed";
+import type { Infer } from "convex/values";
+import type { ingestJobStatusValidator, lineSeedingStateValidator } from "../convex/schema";
 
-export type IngestJobState =
-  | "pending"
-  | "running"
-  | "completed"
-  | "failed"
-  | null;
+export type BreakdownPathState = Infer<typeof lineSeedingStateValidator>;
+export type IngestJobState = Infer<typeof ingestJobStatusValidator> | null;
 
 export type BreakdownTrack = "transcript" | "laughs";
 

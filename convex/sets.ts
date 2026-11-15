@@ -1,8 +1,9 @@
 import { abandonUpload, CONTACT_TIMEOUT_MS } from "./uploadLifecycle";
 import { v } from "convex/values";
 
+import { cancelMuxDirectUpload, createMuxDirectUpload } from "../lib/mux-api";
 import { toConvexError } from "../lib/errors";
-import { isAllowedSetDevEmail } from "../lib/dev-access";
+import { isAllowedDevEmail, isAllowedSetDevEmail } from "../lib/dev-access";
 import { mergeLaugh } from "../lib/breakdown-lines";
 import { composeTranscriptText } from "../lib/setAnalysis";
 import { getBunnyArtifactCdnUrl } from "./bunny";
@@ -10,6 +11,7 @@ import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import {
+  action,
   internalMutation,
   internalQuery,
   mutation,
@@ -294,7 +296,7 @@ export const getDevPipelineDashboard = query({
   handler: async (ctx) => {
     const identity = await ctx.auth.getUserIdentity();
 
-    if (identity === null) {
+    if (!identity || identity.emailVerified !== true || !isAllowedDevEmail(identity.email)) {
       return null;
     }
 
@@ -871,22 +873,63 @@ async function saveLaughEdits(
   return byLine;
 }
 
-export const startUploadSession = mutation({
+export const createDirectUpload = action({
+  args: { corsOrigin: v.string(), originalFileName: v.string() },
+  returns: v.object({
+    uploadId: v.string(),
+    uploadSessionId: v.id("uploadSessions"),
+    uploadUrl: v.union(v.string(), v.null()),
+  }),
+  handler: async (ctx, args): Promise<{
+    uploadId: string;
+    uploadSessionId: Id<"uploadSessions">;
+    uploadUrl: string | null;
+  }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw toConvexError("auth");
+
+    const upload = await createMuxDirectUpload({ corsOrigin: args.corsOrigin });
+    let registration: { uploadSessionId: Id<"uploadSessions"> } | null;
+    try {
+      registration = await ctx.runMutation(internal.sets.startUploadSession, {
+        muxUploadId: upload.id,
+        originalFileName: args.originalFileName,
+        ownerTokenIdentifier: identity.tokenIdentifier,
+      });
+    } catch (error) {
+      // The URL has never been exposed, so this upload cannot have started.
+      await cancelMuxDirectUpload(upload.id).catch((cleanupError) => {
+        console.error("Could not cancel an unregistered direct upload.", cleanupError);
+      });
+      throw error;
+    }
+    if (!registration) throw toConvexError("internal");
+
+    return { uploadId: upload.id, ...registration, uploadUrl: upload.url ?? null };
+  },
+});
+
+export const startUploadSession = internalMutation({
   args: {
     muxUploadId: v.string(),
     originalFileName: v.string(),
+    ownerTokenIdentifier: v.string(),
   },
+  returns: v.union(v.null(), v.object({ uploadSessionId: v.id("uploadSessions") })),
   handler: async (ctx, args) => {
-    const tokenIdentifier = await requireViewerTokenIdentifier(ctx);
+    const existing = await ctx.db.query("uploadSessions")
+      .withIndex("by_muxUploadId", (q) => q.eq("muxUploadId", args.muxUploadId))
+      .unique();
+    if (existing !== null) return null;
 
     const uploadSessionId = await ctx.db.insert("uploadSessions", {
-      ownerTokenIdentifier: tokenIdentifier,
+      ownerTokenIdentifier: args.ownerTokenIdentifier,
       muxUploadId: args.muxUploadId,
       originalFileName: args.originalFileName.trim(),
       status: "waitingForUpload",
       lastContactAt: Date.now(),
     });
-    await ctx.scheduler.runAfter(300_000, internal.uploadLifecycle.expire, { uploadSessionId });
+    await ctx.scheduler.runAfter(CONTACT_TIMEOUT_MS, internal.uploadLifecycle.expire, { uploadSessionId });
 
     return { uploadSessionId };
   },
@@ -907,9 +950,7 @@ export const discardUploadSession = mutation({
       throw toConvexError("not_found");
     }
 
-    await abandonUpload(ctx, uploadSession);
-
-    return null;
+    return { canCleanUp: await abandonUpload(ctx, uploadSession) };
   },
 });
 
@@ -1045,12 +1086,14 @@ export const getBreakdownLinesInternal = internalQuery({
     breakdownId: v.id("breakdowns"),
   },
   handler: async (ctx, args) => {
-    return ctx.db
+    const lines = await ctx.db
       .query("lines")
       .withIndex("by_breakdownId_and_ordinal", (q) =>
         q.eq("breakdownId", args.breakdownId),
       )
-      .take(2_000);
+      .take(8_193);
+    if (lines.length > 8_192) throw new Error("Breakdown exceeds the Line limit.");
+    return lines.map(({ ordinal, startSeconds, endSeconds }) => ({ ordinal, startSeconds, endSeconds }));
   },
 });
 
