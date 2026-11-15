@@ -9,6 +9,11 @@ export default defineConfig({
           name: "convex",
           include: ["tests/convex/**/*.test.ts"],
           environment: "edge-runtime",
+          env: {
+            BUNNY_STORAGE_ZONE: "test-zone",
+            BUNNY_API_KEY: "test-api-key",
+            BUNNY_CDN_HOSTNAME: "test.b-cdn.net",
+          },
         },
       },
       {

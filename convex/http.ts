@@ -180,18 +180,16 @@ async function verifyMuxWebhookSignature(rawBody: string, signatureHeader: strin
       name: "HMAC",
     },
     false,
-    ["sign"],
+    ["verify"],
   );
-  const digest = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    encoder.encode(`${timestamp}.${rawBody}`),
+  const bytes = /^[0-9a-f]{64}$/.test(signature)
+    ? Uint8Array.from(signature.match(/../g)!, (byte) => Number.parseInt(byte, 16))
+    : null;
+  const verified = bytes !== null && await crypto.subtle.verify(
+    "HMAC", key, bytes, encoder.encode(`${timestamp}.${rawBody}`),
   );
-  const expectedSignature = Array.from(new Uint8Array(digest))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
 
-  if (signature !== expectedSignature) {
+  if (!verified) {
     throw new AppError("auth", {
       debugMessage: "Mux webhook signature verification failed.",
     });

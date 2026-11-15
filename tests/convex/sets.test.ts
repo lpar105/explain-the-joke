@@ -18,6 +18,20 @@ async function markCalibrationSaved(
 }
 
 
+async function registerUploadFixture(
+  t: ReturnType<typeof createConvexTest>,
+  muxUploadId: string,
+  originalFileName: string,
+) {
+  const session = await t.mutation(internal.sets.startUploadSession, {
+    ownerTokenIdentifier: "clerk:user_123",
+    muxUploadId,
+    originalFileName,
+  });
+  if (!session) throw new Error("Duplicate upload fixture.");
+  return session;
+}
+
 async function expectMutationToFailWithCode(
   operation: Promise<unknown>,
   code: string,
@@ -37,6 +51,39 @@ describe("sets", () => {
   beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
   afterEach(() => vi.useRealTimers());
 
+  it("registers only the upload Mux created for the authenticated owner", async () => {
+    const t = createConvexTest();
+    const owner = t.withIdentity({ tokenIdentifier: "clerk:owner" });
+    const other = t.withIdentity({ tokenIdentifier: "clerk:other" });
+    const args = { originalFileName: "set.mp4", corsOrigin: "https://example.test" };
+    vi.stubEnv("MUX_TOKEN_ID", "test-token");
+    vi.stubEnv("MUX_TOKEN_SECRET", "test-secret");
+    const fetchMux = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json({
+      data: { id: "upload-1", url: "https://example.test/upload" },
+    }));
+
+    try {
+      await expectMutationToFailWithCode(t.action(api.sets.createDirectUpload, args), "auth");
+      expect(fetchMux).not.toHaveBeenCalled();
+
+      const result = await owner.action(api.sets.createDirectUpload, args);
+      expect(result).toMatchObject({ uploadId: "upload-1", uploadUrl: "https://example.test/upload" });
+      expect(fetchMux).toHaveBeenCalledWith("https://api.mux.com/video/v1/uploads", expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ cors_origin: args.corsOrigin, new_asset_settings: { playback_policy: ["public"] } }),
+      }));
+      await expect(other.action(api.sets.createDirectUpload, args)).rejects.toThrow();
+      expect(fetchMux).toHaveBeenCalledTimes(2);
+      expect(await other.query(api.sets.getUploadSessionByMuxUploadIdForViewer, { muxUploadId: result.uploadId })).toBeNull();
+      expect(await owner.query(api.sets.getUploadSessionByMuxUploadIdForViewer, { muxUploadId: result.uploadId })).toMatchObject({
+        _id: result.uploadSessionId, ownerTokenIdentifier: "clerk:owner", status: "waitingForUpload",
+      });
+    } finally {
+      fetchMux.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("confirms a ready upload session into one set, one breakdown, and one active temporary playback source", async () => {
     const t = createConvexTest();
     const asOwner = t.withIdentity({
@@ -46,13 +93,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_123",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_123",
-        originalFileName: "late-show.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_123", "late-show.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_123",
@@ -132,13 +173,7 @@ describe("sets", () => {
       subject: "user_123",
       tokenIdentifier: "clerk:user_123",
     });
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_failed_ingest",
-        originalFileName: "failed-ingest.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_failed_ingest", "failed-ingest.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_failed_ingest",
@@ -196,13 +231,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_999",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_999",
-        originalFileName: "tight-five.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_999", "tight-five.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_999",
@@ -311,13 +340,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_123",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_bad_trim",
-        originalFileName: "bad-trim.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_bad_trim", "bad-trim.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_bad_trim",
@@ -367,13 +390,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_123",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_single_use",
-        originalFileName: "single-use.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_single_use", "single-use.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_single_use",
@@ -414,13 +431,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_123",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_not_ready",
-        originalFileName: "not-ready.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_not_ready", "not-ready.mp4");
 
     await expectMutationToFailWithCode(
       asOwner.mutation(api.sets.confirmUploadSession, {
@@ -446,13 +457,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_123",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_mismatch",
-        originalFileName: "mismatch.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_mismatch", "mismatch.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_mismatch",
@@ -507,24 +512,48 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_999",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_webhook",
-        originalFileName: "webhook.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_webhook", "webhook.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_webhook",
       muxUploadId: "upl_webhook",
     });
-    await t.mutation(internal.sets.markUploadSessionReadyForTrim, {
-      durationSeconds: 101,
-      muxAssetId: "asset_webhook",
-      muxPlaybackId: "playback_webhook",
-      muxUploadId: "upl_webhook",
+    const webhookBody = JSON.stringify({
+      type: "video.asset.ready",
+      data: {
+        duration: 101,
+        id: "asset_webhook",
+        playback_ids: [{ id: "playback_webhook", policy: "public" }],
+        tracks: [{ type: "video" }],
+        upload_id: "upl_webhook",
+      },
     });
+    const encoder = new TextEncoder();
+    const timestamp = Math.floor(Date.now() / 1000);
+    const secret = "webhook-test-secret";
+    const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    const sign = async (time: number) => {
+      const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(`${time}.${webhookBody}`));
+      return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+    };
+    const deliver = (time: number, signature: string, body = webhookBody) => t.fetch("/mux/webhooks", {
+      method: "POST",
+      headers: { "Mux-Signature": `t=${time},v1=${signature}` },
+      body,
+    });
+    vi.stubEnv("MUX_WEBHOOK_SECRET", secret);
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const valid = await sign(timestamp);
+      expect((await deliver(timestamp, valid, webhookBody + " ")).status).toBe(401);
+      expect((await deliver(timestamp, "invalid")).status).toBe(401);
+      const old = timestamp - 301;
+      expect((await deliver(old, await sign(old))).status).toBe(401);
+      expect((await deliver(timestamp, valid)).status).toBe(200);
+    } finally {
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
 
     const session = await asOwner.query(api.sets.getUploadSessionForViewer, {
       uploadSessionId,
@@ -559,13 +588,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_999",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_owner_lookup",
-        originalFileName: "lookup.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_owner_lookup", "lookup.mp4");
 
     const visibleToOwner = await asOwner.query(
       api.sets.getUploadSessionByMuxUploadIdForViewer,
@@ -596,13 +619,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_123",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_failed",
-        originalFileName: "failed.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_failed", "failed.mp4");
 
     await t.mutation(internal.sets.markUploadSessionFailed, {
       failureCode: "processing_unavailable",
@@ -628,13 +645,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_123",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_analysis",
-        originalFileName: "analysis.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_analysis", "analysis.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_analysis",
@@ -752,13 +763,7 @@ describe("sets", () => {
       .mockReturnValueOnce(bunnyReadiness);
 
     try {
-      const { uploadSessionId } = await asOwner.mutation(
-        api.sets.startUploadSession,
-        {
-          muxUploadId: "upl_bunny_swap",
-          originalFileName: "bunny-swap.mp4",
-        },
-      );
+      const { uploadSessionId } = await registerUploadFixture(t, "upl_bunny_swap", "bunny-swap.mp4");
 
       await t.mutation(internal.sets.markUploadSessionProcessing, {
         muxAssetId: "asset_bunny_swap",
@@ -885,13 +890,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_123",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_cleanup_records",
-        originalFileName: "cleanup-records.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_cleanup_records", "cleanup-records.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_cleanup_records",
@@ -952,13 +951,7 @@ describe("sets", () => {
       tokenIdentifier: "clerk:user_123",
     });
 
-    const { uploadSessionId } = await asOwner.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_unlock",
-        originalFileName: "unlock.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_unlock", "unlock.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_unlock",
@@ -1068,18 +1061,13 @@ describe("sets", () => {
     const t = createConvexTest();
     const asAllowedViewer = t.withIdentity({
       email: "devwithlex@gmail.com",
+      emailVerified: true,
       issuer: "https://clerk.dev",
       subject: "user_123",
       tokenIdentifier: "clerk:user_123",
     });
 
-    const { uploadSessionId } = await asAllowedViewer.mutation(
-      api.sets.startUploadSession,
-      {
-        muxUploadId: "upl_dev_dashboard",
-        originalFileName: "dev-dashboard.mp4",
-      },
-    );
+    const { uploadSessionId } = await registerUploadFixture(t, "upl_dev_dashboard", "dev-dashboard.mp4");
 
     await t.mutation(internal.sets.markUploadSessionProcessing, {
       muxAssetId: "asset_dev_dashboard",
@@ -1107,6 +1095,15 @@ describe("sets", () => {
       path: "line",
       state: "ready",
     });
+
+    for (const email of ["other@example.com", "devwithlex@gmail.com"]) {
+      const denied = t.withIdentity({
+        email,
+        emailVerified: email === "other@example.com",
+        tokenIdentifier: "clerk:user_123",
+      });
+      expect(await denied.query(api.sets.getDevPipelineDashboard)).toBeNull();
+    }
 
     const visible = await asAllowedViewer.query(api.sets.getDevPipelineDashboard);
 

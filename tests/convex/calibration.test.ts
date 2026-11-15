@@ -122,6 +122,37 @@ describe('calibration commitment and publication', () => {
     });
   });
 
+  it('publishes a manual mark on the 2,001st Line', async () => {
+    const f = await prepared();
+    await f.t.run(async ctx => {
+      await ctx.db.patch(f.lineId, { endSeconds: 0.025 });
+      for (let index = 1; index < 2001; index++) {
+        await ctx.db.insert('lines', {
+          breakdownId: f.breakdownId, ordinal: index + 1, startSeconds: index / 40,
+          endSeconds: index === 2000 ? f.duration : (index + 1) / 40,
+          text: 'Word', wordCount: 1, laughCount: 0, laughIntensityScore: 0,
+        });
+      }
+    });
+    await f.asOwner.action(api.calibration.confirm, {
+      uploadSessionId: f.uploadSessionId, intervals: [{ start: 51, end: 52 }],
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(Response.json({
+      version: 'rms-zcr-v1', preprocessingVersion: 'bandpass-afftdn-attenuation-v1',
+      retainedMediaKey: f.mediaKey, retainedMediaSha256: 'a'.repeat(64),
+      totalDuration: f.duration, frameSeconds: 0.04, intensityReference: 2,
+      scores: Array(1500).fill(1),
+    })));
+
+    await f.t.action(internal.calibration.publishManual, { ingestJobId: f.ingestJobId });
+    const laugh = await f.t.run(async ctx => {
+      const region = await ctx.db.query('laughRegions')
+        .withIndex('by_breakdownId_and_ordinal', q => q.eq('breakdownId', f.breakdownId)).unique();
+      return region ? { ...region, lineOrdinal: (await ctx.db.get(region.lineId))?.ordinal } : null;
+    });
+    expect(laugh).toMatchObject({ lineOrdinal: 2001, startSeconds: 51, endSeconds: 52 });
+  });
+
   it.each([12.345, 60])('commits and publishes exact manual labels for a %s-second Set', async duration => {
     const f = await prepared(duration);
     expect(await f.asOwner.query(api.sets.listForViewer)).toEqual([]);

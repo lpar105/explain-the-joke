@@ -47,6 +47,26 @@ describe("persisted spoken Lines", () => {
     expect(splitLinesForLaughs([line(" ")], laughs, [], 8)).toEqual([]);
   });
 
+  it("keeps the saved word boundaries when the archive spells the same characters differently", () => {
+    const result = splitLinesForLaughs(
+      [line("Keep apart now")],
+      [region(1.5, 1.8, 0.9), region(4, 4.5, 0.4)],
+      [word("Keep", 1), word("a", 2), word("part", 3), word("now", 6)],
+      8,
+    );
+    expect(result.map(item => item.text)).toEqual(["Keep apart now"]);
+  });
+
+  it("accepts separate punctuation from the archive when it reproduces saved text", () => {
+    const result = splitLinesForLaughs(
+      [line("Keep apart, now!")],
+      [region(1.5, 1.8, 0.9), region(4, 4.5, 0.4)],
+      [word("Keep", 1), word("apart", 2), word(",", 2.2), word("now!", 6)],
+      8,
+    );
+    expect(result.map(item => item.text)).toEqual(["Keep", "apart, now!"]);
+  });
+
   it("keeps both fragments spoken when an overlapping laugh ends after the next starts", () => {
     const laughs = [region(2, 5, 0.9), region(3.1, 5.3, 0.4)];
     const result = splitLinesForLaughs([line("First second")], laughs, [word("First", 1), word("second", 2.9)], 8);

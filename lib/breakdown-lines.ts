@@ -26,7 +26,7 @@ export function joinWords(words: string[]) {
   return result.trim();
 }
 
-const compact = (text: string) => text.replace(/\s/g, "");
+const normalizeWhitespace = (text: string) => text.trim().replace(/\s+/g, " ");
 
 function alignWords(lines: SpokenLine[], words: TimedWord[]) {
   // Match the entire saved transcript in order before treating gaps as silence.
@@ -38,7 +38,7 @@ function alignWords(lines: SpokenLine[], words: TimedWord[]) {
   let cursor = 0;
   const matched = [];
   for (const [index, line] of lines.entries()) {
-    const target = compact(line.text);
+    const target = normalizeWhitespace(line.text);
     const first = cursor;
     let text = "";
     while (cursor < words.length && text.length < target.length) {
@@ -46,7 +46,7 @@ function alignWords(lines: SpokenLine[], words: TimedWord[]) {
       const nextStart = lines[index + 1]?.startSeconds ?? line.endSeconds;
       // The original seeding rounded Line boundaries to milliseconds.
       if (word.start < line.startSeconds - 0.0005 || word.start >= nextStart + 0.0005) return null;
-      text += compact(word.word);
+      text = joinWords([text, normalizeWhitespace(word.word)]);
     }
     if (text !== target) return null;
     matched.push(words.slice(first, cursor));

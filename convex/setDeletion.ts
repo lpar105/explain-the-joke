@@ -130,7 +130,8 @@ export const requestDeletion = mutation({
     }
 
     const set = await ctx.db.get(args.setId);
-    if (set === null || set.ownerTokenIdentifier !== identity.tokenIdentifier) {
+    if (set === null) return null;
+    if (set.ownerTokenIdentifier !== identity.tokenIdentifier) {
       throw toConvexError("not_found");
     }
 

@@ -118,11 +118,12 @@ export async function DELETE(
       return access.errorResponse;
     }
 
-    await fetchMutation(
+    const { canCleanUp } = await fetchMutation(
       api.sets.discardUploadSession,
       { uploadSessionId: access.uploadSessionId },
       { token: access.token },
     );
+    if (!canCleanUp) return Response.json({ deletedAssetId: null, uploadId });
 
     const upload = await getMuxDirectUpload(uploadId);
 

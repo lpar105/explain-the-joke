@@ -13,6 +13,7 @@ import { artifactType, DevAudioComparison, DevCutoffControls, type SetArtifact, 
 import { SetEditDialog } from "./set-edit-dialog";
 import { Button } from "./ui/button";
 import { useSetPlayback } from "./use-set-playback";
+import { useVerifiedSetArtifacts } from "./use-verified-dev-query";
 import styles from "./set-page-client.module.css";
 
 const emptyLines: TranscriptSentence[] = [];
@@ -21,7 +22,9 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
   const dev = devArtifacts !== undefined;
   const { isLoading, isAuthenticated } = useConvexAuth();
   const set = useQuery(api.sets.getSetPageForViewer, !dev || isAuthenticated ? { setId } : "skip");
-  const liveArtifacts = useQuery(api.sets.listDevArtifacts, dev && isAuthenticated ? { setId } : "skip");
+  const nativeArtifacts = useQuery(api.sets.listDevArtifacts, dev && isAuthenticated ? { setId } : "skip");
+  const verifiedArtifacts = useVerifiedSetArtifacts(setId, dev && isAuthenticated && nativeArtifacts === null);
+  const liveArtifacts = nativeArtifacts === null ? verifiedArtifacts : nativeArtifacts;
   const artifacts = liveArtifacts === undefined ? devArtifacts : liveArtifacts ?? undefined;
   const cutoff = useDevCutoff(setId, artifacts);
   const [selection, setSelection] = useState("");

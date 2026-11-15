@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useQuery } from "convex/react";
+import { useVerifiedPipelineDashboard } from "./use-verified-dev-query";
 
 import { api } from "../convex/_generated/api";
 import UploadSetDialog from "./library/upload-set-dialog";
@@ -795,7 +796,9 @@ function PipelineSetCard({
 }
 
 export default function PipelineDashboardClient() {
-  const dashboard = useQuery(api.sets.getDevPipelineDashboard, {});
+  const nativeDashboard = useQuery(api.sets.getDevPipelineDashboard, {});
+  const verifiedDashboard = useVerifiedPipelineDashboard(nativeDashboard === null);
+  const dashboard = nativeDashboard === null ? verifiedDashboard : nativeDashboard;
 
   if (dashboard === undefined) {
     return (
