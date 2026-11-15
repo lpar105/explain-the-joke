@@ -23,6 +23,8 @@ Convex agent skills for common tasks can be installed by running
 
 Issues are tracked in this repo's GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
+Wayfinder uses the "Wayfinding operations" section in that document for maps, decision tickets, dependencies, and frontier queries.
+
 ### Triage labels
 
 This repo uses the default triage label vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
@@ -30,4 +32,6 @@ This repo uses the default triage label vocabulary: `needs-triage`, `needs-info`
 ### Domain docs
 
 This repo uses a single-context domain doc layout with a root `CONTEXT.md` and root `docs/adr/`. See `docs/agents/domain.md`.
+
+Upstream Matt Pocock skills call the domain glossary `GLOSSARY.md`. In this repo, read and update `CONTEXT.md` wherever those skills say `GLOSSARY.md`; use `CONTEXT-MAP.md` for `GLOSSARY-MAP.md`. Keep the existing filenames and a single source of truth.
 <!-- issue-tracking-end -->
