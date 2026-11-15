@@ -2,40 +2,40 @@
 
 import { SignInButton, SignUpButton } from '@clerk/nextjs'
 import { Authenticated, AuthLoading, Unauthenticated, useMutation, useQuery } from 'convex/react'
-import { LoaderCircle, PencilLine, Plus } from 'lucide-react'
+import { LoaderCircle, PencilLine, Trash2 } from 'lucide-react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { useMemo, useState } from 'react'
+import { Suspense, useMemo, useState } from 'react'
+import CalibrationPrototype from '../../components/library/calibration-prototype'
 
 import { api } from '../../convex/_generated/api'
+import { getAppErrorCodeFromConvexError, getErrorMessageForCode } from '../../lib/errors'
+import UploadSetDialog from '../../components/library/upload-set-dialog'
 import { Button } from '../../components/ui/button'
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from '../../components/ui/dialog'
 import { Input } from '../../components/ui/input'
 import {
-  formatCreationDate,
   formatDuration,
-  getBreakdownBadgeLabel,
-  getBreakdownSummary,
-  getSetStatusLabel,
+  formatSetDate,
+  getSetDateInputValue,
 } from '../../lib/set-status'
+
+type LibrarySet = NonNullable<ReturnType<typeof useQuery<typeof api.sets.listForViewer>>>[number]
 
 export default function LibraryPage() {
   return (
     <main className="min-h-[calc(100vh-4.5rem)] bg-[#faf8f5] px-4 py-5 text-[#1a1a1a] md:px-6">
+      <Suspense fallback={null}><CalibrationPrototype /></Suspense>
       <div className="mx-auto flex min-h-full max-w-7xl flex-col gap-6">
         <section className="border-2 border-[#1a1a1a] bg-white shadow-[6px_6px_0px_0px_#1a1a1a]">
           <div className="grid gap-4 border-b-2 border-[#1a1a1a] bg-[#f0ede8] p-4 md:grid-cols-[1fr_auto] md:items-end">
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.28em] text-[#6d675f]">
-                View and Add Sets
-              </p>
               <h1 className="mt-2 text-3xl font-black uppercase tracking-tight md:text-5xl">
                 My Library
               </h1>
@@ -80,75 +80,10 @@ export default function LibraryPage() {
   )
 }
 
-function UploadSetDialog() {
-  const router = useRouter()
-  const [open, setOpen] = useState(false)
-  const [title, setTitle] = useState('')
-
-  function continueToTrimRange() {
-    const params = new URLSearchParams()
-    if (title.trim()) {
-      params.set('title', title.trim())
-    }
-
-    setOpen(false)
-    router.push(params.size > 0 ? `/library/new?${params.toString()}` : '/library/new')
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="lg" variant="destructive">
-          <Plus className="size-4" />
-          Add New Set
-        </Button>
-      </DialogTrigger>
-
-      <DialogContent className="max-w-xl p-0">
-        <DialogHeader>
-          <DialogTitle>Upload New Set</DialogTitle>
-        </DialogHeader>
-
-        <div className="grid gap-4 p-4">
-          <label className="grid gap-2">
-            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#1a1a1a]">
-              Set Title
-            </span>
-            <Input
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Late Show Crowd Work"
-            />
-          </label>
-
-          <div className="border-2 border-dashed border-[#1a1a1a] bg-white p-4">
-            <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#6d675f]">
-              Next step
-            </p>
-            <p className="mt-2 text-sm leading-6 text-[#4f4a43]">
-              TEMP This library entry point now acts like the prototype&apos;s upload modal, but it
-              keeps the domain contract clean: the next screen is where Trim Range confirmation
-              creates the real Set and its locked current Breakdown.
-            </p>
-          </div>
-
-          <DialogFooter className="border-t-2 border-[#1a1a1a] pt-4">
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={continueToTrimRange}>
-              Continue
-            </Button>
-          </DialogFooter>
-        </div>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 function LibraryGrid() {
   const sets = useQuery(api.sets.listForViewer, {})
   const [editingSetId, setEditingSetId] = useState<string | null>(null)
+  const [statusMessage, setStatusMessage] = useState<string | null>(null)
 
   const activeSet = useMemo(
     () => sets?.find((set) => set._id === editingSetId) ?? null,
@@ -161,20 +96,20 @@ function LibraryGrid() {
 
   if (sets.length === 0) {
     return (
-      <div className="flex min-h-[360px] flex-col items-center justify-center border-2 border-dashed border-[#1a1a1a] bg-[#f7f3ee] px-6 text-center">
-        <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-[#6d675f]">Empty Rack</p>
-        <h2 className="mt-3 text-2xl font-black uppercase tracking-tight">
-          No Sets Uploaded Yet
-        </h2>
-        <p className="mt-2 max-w-xl text-sm font-medium text-[#5a554f]">
-          Upload a set to get started!
-        </p>
+      <div className="grid gap-4">
+        {statusMessage ? <LibraryStatusMessage message={statusMessage} /> : null}
+        <div className="flex min-h-[360px] flex-col items-center justify-center border-2 border-dashed border-[#1a1a1a] bg-[#f7f3ee] px-6 text-center">
+          <h2 className="mt-3 text-2xl font-black uppercase tracking-tight">
+            No Sets Uploaded Yet
+          </h2>
+        </div>
       </div>
     )
   }
 
   return (
     <>
+      {statusMessage ? <LibraryStatusMessage message={statusMessage} /> : null}
       <div className="grid grid-cols-1 gap-x-3 gap-y-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
         {sets.map((set) => (
           <LibrarySetCard
@@ -188,6 +123,10 @@ function LibraryGrid() {
       <ManageSetDialog
         key={activeSet?._id ?? 'closed'}
         set={activeSet}
+        onDeleted={() => {
+          setEditingSetId(null)
+          setStatusMessage('Set deleted.')
+        }}
         onOpenChange={(open) => !open && setEditingSetId(null)}
       />
     </>
@@ -198,25 +137,9 @@ function LibrarySetCard({
   set,
   onManage,
 }: {
-  set: NonNullable<ReturnType<typeof useQuery<typeof api.sets.listForViewer>>>[number]
+  set: LibrarySet
   onManage: () => void
 }) {
-  const breakdown = set.breakdown
-  const setStatusLabel = getSetStatusLabel(set.setStatus)
-  const breakdownBadge = breakdown
-    ? getBreakdownBadgeLabel(
-      breakdown.editability,
-      breakdown.lineSeedingState,
-      breakdown.laughSeedingState,
-    )
-    : 'No Breakdown'
-  const breakdownSummary = breakdown
-    ? getBreakdownSummary(
-      breakdown.editability,
-      breakdown.lineSeedingState,
-      breakdown.laughSeedingState,
-    )
-    : 'No current Breakdown has been linked yet.'
   const retainedDuration = Math.max(
     0,
     set.trimRangeEndSeconds - set.trimRangeStartSeconds,
@@ -237,37 +160,24 @@ function LibrarySetCard({
       <Link href={`/sets/${set._id}`} className="block">
         <div className="border-2 border-[#1a1a1a] bg-white shadow-[4px_4px_0px_0px_#1a1a1a] transition-transform duration-150 group-hover:-translate-y-1">
           <SetPoster
-            setStatusLabel={setStatusLabel}
-            breakdownBadge={breakdownBadge}
-            isLocked={breakdown?.editability !== 'editable'}
+            title={set.title}
+            thumbnailUrl={set.thumbnailUrl}
+            fallbackVideoUrl={
+              set.activePlaybackSource?.provider === 'bunny'
+                ? set.activePlaybackSource.playbackId
+                : null
+            }
           />
 
-          <div className="grid gap-3 p-3">
-            <div className="space-y-1">
-              <h2 className="line-clamp-2 pr-11 text-lg font-black uppercase tracking-tight text-[#1a1a1a]">
+          <div className="grid min-w-0 gap-3 p-3">
+            <div className="min-w-0 space-y-1">
+              <h2 className="overflow-hidden text-ellipsis whitespace-nowrap pr-11 text-lg font-black uppercase tracking-tight text-[#1a1a1a]">
                 {set.title}
               </h2>
               <p className="text-[11px] font-medium text-[#6d675f]">
-                {formatCreationDate(set._creationTime)} / {formatDuration(retainedDuration)}
+                {formatSetDate(set.performanceDate, set._creationTime)} / {formatDuration(retainedDuration)}
               </p>
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              <StatusPill tone="set">{setStatusLabel}</StatusPill>
-              <StatusPill
-                tone={
-                  breakdown?.lineSeedingState === 'failed' || breakdown?.laughSeedingState === 'failed'
-                    ? 'error'
-                    : breakdown?.editability === 'editable'
-                      ? 'success'
-                      : 'breakdown'
-                }
-              >
-                {breakdownBadge}
-              </StatusPill>
-            </div>
-
-            <p className="text-sm leading-6 text-[#4f4a43]">{breakdownSummary}</p>
           </div>
         </div>
       </Link>
@@ -276,70 +186,82 @@ function LibrarySetCard({
 }
 
 function SetPoster({
-  setStatusLabel,
-  breakdownBadge,
-  isLocked,
+  title,
+  thumbnailUrl,
+  fallbackVideoUrl,
 }: {
-  setStatusLabel: string
-  breakdownBadge: string
-  isLocked: boolean
+  title: string
+  thumbnailUrl: string | null
+  fallbackVideoUrl: string | null
 }) {
   return (
     <div className="relative aspect-video overflow-hidden bg-[#f0ede8]">
       <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,#ffffff_0%,#f0ede8_50%,#e3ddd6_100%)]" />
       <div className="absolute inset-0 bg-[linear-gradient(135deg,transparent_0%,transparent_47%,rgba(26,26,26,0.08)_47%,rgba(26,26,26,0.08)_53%,transparent_53%,transparent_100%)]" />
-      <div className="absolute inset-0 flex flex-col justify-between p-3">
-        <div className="flex items-start justify-between gap-2">
-          <StatusPill tone="poster">{setStatusLabel}</StatusPill>
-        </div>
-      </div>
+      {thumbnailUrl ? (
+        // These URLs come from the app's configured Mux/Bunny providers and
+        // should be fetched directly so a newly-ready thumbnail is not delayed.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          key={thumbnailUrl}
+          src={thumbnailUrl}
+          alt={`Video thumbnail for ${title}`}
+          loading="lazy"
+          className="absolute inset-0 size-full object-cover"
+          onError={(event) => {
+            event.currentTarget.style.display = 'none'
+          }}
+        />
+      ) : fallbackVideoUrl ? (
+        <video
+          src={fallbackVideoUrl}
+          aria-label={`Video thumbnail for ${title}`}
+          preload="metadata"
+          muted
+          playsInline
+          className="absolute inset-0 size-full object-cover"
+        />
+      ) : null}
     </div>
   )
 }
 
-function StatusPill({
-  children,
-  tone,
-}: {
-  children: React.ReactNode
-  tone: 'set' | 'breakdown' | 'success' | 'error' | 'poster'
-}) {
-  const className =
-    tone === 'success'
-      ? 'bg-[#e7f7ee] text-[#0f5132]'
-      : tone === 'error'
-        ? 'bg-[#fff0f0] text-[#a61b32]'
-        : tone === 'poster'
-          ? 'bg-[#1a1a1a] text-[#faf8f5]'
-          : tone === 'set'
-            ? 'bg-[#1a3a52] text-[#faf8f5]'
-            : 'bg-white text-[#1a1a1a]'
-
+function LibraryStatusMessage({ message }: { message: string }) {
   return (
-    <span
-      className={`inline-flex items-center border-2 border-[#1a1a1a] px-2.5 py-1 text-[10px] font-black uppercase tracking-[0.16em] ${className}`}
+    <p
+      role="status"
+      className="border-2 border-[#1a1a1a] bg-[#e8f4ec] px-3 py-3 text-sm font-bold text-[#1a3a2a]"
     >
-      {children}
-    </span>
+      {message}
+    </p>
   )
 }
 
 function ManageSetDialog({
   set,
+  onDeleted,
   onOpenChange,
 }: {
-  set: NonNullable<ReturnType<typeof useQuery<typeof api.sets.listForViewer>>>[number] | null
+  set: LibrarySet | null
+  onDeleted: () => void
   onOpenChange: (open: boolean) => void
 }) {
-  const renameSet = useMutation(api.sets.rename)
-  const [draftTitle, setDraftTitle] = useState(() => set?.title ?? '')
+  const updateSetDetails = useMutation(api.sets.updateDetails)
+  const deleteSet = useMutation(api.setDeletion.requestDeletion)
+  const [draftTitle, setDraftTitle] = useState<string | null>(null)
+  const [draftDate, setDraftDate] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const currentDate = set ? getSetDateInputValue(set.performanceDate, set._creationTime) : ''
+  const titleChanged = draftTitle !== null && draftTitle !== set?.title
+  const dateChanged = draftDate !== null && draftDate !== currentDate
+  const canSave = (titleChanged || dateChanged) && !isSaving && !isDeleting
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
 
-    if (!set) {
+    if (!set || !canSave) {
       return
     }
 
@@ -347,22 +269,56 @@ function ManageSetDialog({
     setErrorMessage(null)
 
     try {
-      await renameSet({
+      await updateSetDetails({
         setId: set._id,
-        title: draftTitle,
+        ...(titleChanged ? { title: draftTitle } : {}),
+        ...(dateChanged ? { performanceDate: draftDate } : {}),
       })
       onOpenChange(false)
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : 'Rename failed.')
+      const errorCode = getAppErrorCodeFromConvexError(error)
+      setErrorMessage(
+        errorCode ? getErrorMessageForCode(errorCode) : 'Something went wrong on our side. Try again.',
+      )
       setIsSaving(false)
     }
   }
 
+  async function handleDelete() {
+    if (!set || isDeleting || isSaving) {
+      return
+    }
+
+    setIsDeleting(true)
+    setErrorMessage(null)
+
+    try {
+      await deleteSet({ setId: set._id })
+      onDeleted()
+    } catch (error) {
+      const errorCode = getAppErrorCodeFromConvexError(error)
+      setErrorMessage(
+        errorCode ? getErrorMessageForCode(errorCode) : 'Something went wrong on our side. Try again.',
+      )
+      setIsDeleting(false)
+    }
+  }
+
   return (
-    <Dialog open={Boolean(set)} onOpenChange={onOpenChange}>
+    <Dialog
+      open={Boolean(set)}
+      onOpenChange={(open) => {
+        if (!isSaving && !isDeleting) {
+          onOpenChange(open)
+        }
+      }}
+    >
       <DialogContent className="max-w-lg p-0">
         <DialogHeader>
           <DialogTitle>Manage Set</DialogTitle>
+          <DialogDescription className="sr-only">
+            Edit this Set’s title or performance date, or delete it.
+          </DialogDescription>
         </DialogHeader>
 
         {set ? (
@@ -372,21 +328,26 @@ function ManageSetDialog({
                 Set Title
               </span>
               <Input
-                value={draftTitle}
+                value={draftTitle ?? set.title}
                 onChange={(event) => setDraftTitle(event.target.value)}
                 placeholder="Untitled Set"
+                disabled={isSaving || isDeleting}
               />
             </label>
 
-            <div className="border-2 border-[#1a1a1a] bg-white p-3">
-              <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#6d675f]">
-                Not here yet
-              </p>
-              <p className="mt-2 text-sm leading-6 text-[#4f4a43]">
-                Deletion is intentionally not wired into this modal yet because the product model
-                routes Set removal through a Trash Window rather than a permanent library delete.
-              </p>
-            </div>
+            <label className="grid gap-2">
+              <span className="text-[10px] font-black uppercase tracking-[0.2em] text-[#1a1a1a]">
+                Performance Date
+              </span>
+              <Input
+                type="date"
+                value={draftDate ?? currentDate}
+                onChange={(event) => setDraftDate(event.target.value)}
+                max="9999-12-31"
+                required
+                disabled={isSaving || isDeleting}
+              />
+            </label>
 
             {errorMessage ? (
               <p className="border-2 border-[#1a1a1a] bg-[#fff0f0] px-3 py-3 text-sm text-[#a61b32]">
@@ -395,14 +356,38 @@ function ManageSetDialog({
             ) : null}
 
             <DialogFooter className="border-t-2 border-[#1a1a1a] pt-4">
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={isSaving || isDeleting}>
                 Cancel
               </Button>
-              <Button type="submit" disabled={isSaving}>
+              <Button type="submit" disabled={!canSave}>
                 {isSaving ? <LoaderCircle className="size-4 animate-spin" /> : null}
-                Save Title
+                Save Changes
               </Button>
             </DialogFooter>
+
+            <section className="grid gap-3 border-2 border-[#c41e3a] bg-[#fff0f0] p-3">
+              <div>
+                <h3 className="text-sm font-black uppercase tracking-tight text-[#a61b32]">
+                  Delete Set
+                </h3>
+                <p className="mt-1 text-xs font-medium text-[#6d2532]">
+                  Permanently deletes this Set, its analysis, and all stored media. This cannot be undone.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={isSaving || isDeleting}
+                onClick={handleDelete}
+              >
+                {isDeleting ? (
+                  <LoaderCircle className="size-4 animate-spin" />
+                ) : (
+                  <Trash2 className="size-4" />
+                )}
+                Delete Set
+              </Button>
+            </section>
           </form>
         ) : null}
       </DialogContent>

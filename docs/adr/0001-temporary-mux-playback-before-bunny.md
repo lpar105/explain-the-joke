@@ -1,3 +1,3 @@
-# Temporary Mux playback before Bunny
+# Temporary Mux playback before canonical Bunny media
 
-Sets use a temporary Mux-backed playback source first so newly uploaded media becomes playable quickly, then switch to a Bunny-backed playback source once Bunny encoding is ready because responsiveness is a core product feature and Bunny is the lower-cost long-term host. The product keeps one stable set playback experience while the active playback source changes behind the scenes, and the temporary Mux asset should be deleted as soon as the Bunny source is ready and active to limit expensive storage.
+Sets use a temporary Mux-backed Playback Source first so newly uploaded media becomes playable quickly. After the Trim Range is confirmed, Modal creates a canonical trimmed `playback.mp4` whose timeline starts at zero and uploads it to Bunny Storage. The Set switches directly to that MP4 through its Bunny CDN URL only after the CDN successfully serves a byte-range request for the media; Bunny Stream transcoding is not part of this handoff. The temporary Mux asset is deleted only after the ready Bunny Playback Source is active.
