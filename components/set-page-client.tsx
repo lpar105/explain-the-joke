@@ -67,6 +67,9 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
     return projected;
   }, [savedLines, previewLaughs]);
   const laughs = useMemo(() => reviewLaughs(lines), [lines]);
+  const longestLaughDuration = useMemo(() => laughs.reduce(
+    (longest, { laugh }) => Math.max(longest, laugh.duration), 0,
+  ), [laughs]);
   const timelineLaughs = previewLaughs ?? laughs.map(({ laugh }) => laugh);
   const isLaughing = hasPlayedSource && timelineLaughs.some((laugh) =>
     laugh.start_time <= currentTime && currentTime < laugh.end_time,
@@ -275,7 +278,6 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
             {(!lines.length || transcriptState !== "ready") && <p role="status" className="p-3 font-mono text-xs text-tf-ink-soft">{transcriptMessage}</p>}
             {(rankedView ? ranked : lines).map((line, index) => {
               const hasLaugh = line.laughs.length > 0;
-              const intensity = Math.round(100 * Math.min(1, Math.max(0, line.laugh_intensity_score)));
               const active = hasPlayedSource && line.index === activeLine?.index;
               return (
                 <button key={line.index} className={styles.line} type="button" disabled={!canSeek}
@@ -285,11 +287,15 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
                     {rankedView && hasLaugh && <span className="shrink-0 font-mono text-[10px] font-bold text-tf-red">#{index + 1}</span>}
                     <span>{line.text}</span>
                   </span>
-                  {hasLaugh && (
-                    <span className="mt-1 block h-[7px] bg-tf-paper-alt" role="img" aria-label={`Laugh intensity ${intensity}%`}>
-                      <span className="block h-full min-w-px bg-tf-red" style={{ width: `${intensity}%` }} />
+                  {line.laughs.map((laugh) => (
+                    <span key={laugh.index} className="mt-1 block h-[7px] bg-tf-paper-alt" role="img"
+                      aria-label={`Laugh duration ${Number(laugh.duration.toFixed(2))} seconds, intensity ${Math.round(laugh.intensity_score * 100)}%`}>
+                      <span className="block h-full min-w-px" style={{
+                        width: `${longestLaughDuration > 0 ? 100 * laugh.duration / longestLaughDuration : 0}%`,
+                        background: laughIntensityColor(laugh.intensity_score),
+                      }} />
                     </span>
-                  )}
+                  ))}
                 </button>
               );
             })}
