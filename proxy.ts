@@ -1,15 +1,6 @@
 import { clerkMiddleware } from '@clerk/nextjs/server';
-import { NextResponse, type NextFetchEvent, type NextRequest } from 'next/server';
 
-const authenticate = clerkMiddleware();
-
-export default function proxy(request: NextRequest, event: NextFetchEvent) {
-    if (process.env.NODE_ENV === 'development' && request.nextUrl.pathname === '/sets/layout-prototype') {
-        return NextResponse.next();
-    }
-
-    return authenticate(request, event);
-}
+export default clerkMiddleware();
 
 export const config = {
     matcher: [
