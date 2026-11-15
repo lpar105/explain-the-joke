@@ -8,7 +8,6 @@ import {
   type ManualInterval, type ScoreTrack, previewCalibratedRegions, validateCalibrationTrack, validateManualSample,
 } from "../lib/calibration";
 import { Button } from "./ui/button";
-import styles from "./set-page-client.module.css";
 
 export type SetArtifact = NonNullable<FunctionReturnType<typeof api.sets.listDevArtifacts>>[number];
 
@@ -80,15 +79,15 @@ export function SetArtifactPreview({ setId, artifact }: { setId: string; artifac
   const json = useArtifactJson<unknown>(type === "json" ? jsonUrl(setId, artifact) : null);
   const [imageFailed, setImageFailed] = useState(false);
   if (!artifact.url || imageFailed || json?.failed) {
-    return <div className={styles.playerMessage}><p role="status" className={styles.artifactStatus}>Artifact unavailable.</p></div>;
+    return <div className="absolute inset-0 grid place-content-center justify-items-center gap-2"><p role="status" className="bg-tf-paper px-3 py-2 text-[0.75rem] [font-family:var(--font-mono),monospace]">Artifact unavailable.</p></div>;
   }
   if (type === "image") {
     // eslint-disable-next-line @next/next/no-img-element -- Artifacts use the deployment's storage hostname.
     return <img src={artifact.url} alt="Generated set thumbnail" onError={() => setImageFailed(true)} className="size-full object-contain" />;
   }
-  if (!json) return <div className={styles.playerMessage}><p role="status" className={styles.artifactStatus}>Opening artifact…</p></div>;
+  if (!json) return <div className="absolute inset-0 grid place-content-center justify-items-center gap-2"><p role="status" className="bg-tf-paper px-3 py-2 text-[0.75rem] [font-family:var(--font-mono),monospace]">Opening artifact…</p></div>;
 
-  return <pre aria-label={artifact.fileName} tabIndex={0} className={styles.artifactJson}>{JSON.stringify(json.data, null, 2)}</pre>;
+  return <pre aria-label={artifact.fileName} tabIndex={0} className="h-full overflow-auto p-3 text-[0.75rem] text-white">{JSON.stringify(json.data, null, 2)}</pre>;
 }
 
 type CalibrationResult = {
@@ -149,13 +148,13 @@ export function DevCutoffControls({ cutoff, onChange }: {
   onChange: () => void;
 }) {
   return (
-    <div className={styles.cutoffControls}>
+    <div className="ms-auto flex min-w-0 flex-wrap items-center gap-2 [@media(max-width:700px)]:ms-0">
       <span>Calibrated cutoff <strong>{cutoff.calibrated ?? cutoff.message}</strong></span>
       {cutoff.calibrated !== null && (cutoff.canPreview ? (
         <>
           <label className="flex items-center gap-2">
             Preview cutoff
-            <input type="number" min="0" step="any" className={styles.cutoffInput}
+            <input type="number" min="0" step="any" className="w-32 min-w-0 border-tf-subtle bg-white px-1.5 py-1 [font-family:var(--font-mono),monospace]"
               value={cutoff.input ?? String(cutoff.calibrated)}
               onChange={(event) => {
                 cutoff.setThreshold(event.currentTarget.value);

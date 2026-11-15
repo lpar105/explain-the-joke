@@ -15,11 +15,12 @@ import { clampTime } from "../lib/trim-range";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 import { type PlaybackSource, useSetPlayback } from "./use-set-playback";
-import styles from "./set-edit-dialog.module.css";
 
 const minWindowLength = 1;
 const zoomSliderSteps = 1000;
 const handleStep = 0.05;
+const markButtonClass = "min-w-0 px-2 whitespace-normal tracking-normal";
+const timelinePaddingClass = "absolute inset-y-0 cursor-default bg-[repeating-linear-gradient(135deg,#dedbd6_0_5px,#e9e6e2_5px_10px)]";
 
 type Laugh = { key: number; index: number | null; start: number; end: number; intensityScore: number };
 type Edge = "start" | "end";
@@ -303,7 +304,7 @@ export function SetEditDialog(props: Props) {
   return (
     <Dialog open onOpenChange={open => { if (!open && !saving) props.onClose(); }}>
       <DialogContent
-        className={styles.dialog}
+        className="flex w-[calc(100%-1.5rem)] max-w-[69rem] max-h-[calc(100dvh-1.5rem)] flex-col"
         onKeyDown={keyboard}
         onOpenAutoFocus={event => { event.preventDefault(); titleRef.current?.focus(); }}
         onCloseAutoFocus={event => { event.preventDefault(); props.trigger.current?.focus(); }}
@@ -314,12 +315,12 @@ export function SetEditDialog(props: Props) {
           <DialogTitle ref={titleRef} tabIndex={-1} className="text-lg sm:text-2xl">Edit transcript/timings</DialogTitle>
           <DialogDescription className="normal-case tracking-normal">{props.title}</DialogDescription>
         </DialogHeader>
-        <div className={styles.workspace}>
+        <div className="grid min-h-0 grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] gap-3 overflow-auto p-3 [@media(max-width:760px)]:grid-cols-1">
           <section className="grid min-w-0 content-start gap-2" aria-label="Playback and laugh timings">
-            <div className={styles.player}>
+            <div className="relative h-[clamp(8rem,33dvh,21rem)] overflow-hidden border-tf bg-tf-ink [@media(max-width:760px)]:h-[clamp(7rem,24dvh,12rem)]">
               <video ref={attachMedia} playsInline preload="auto" onClick={togglePlayback}
                 className="size-full object-contain" />
-              {mediaMessage && <div className={styles.mediaMessage}>
+              {mediaMessage && <div className="absolute inset-x-2 bottom-2 flex items-center justify-center gap-2 bg-tf-paper p-1.5 font-mono text-[0.75rem]">
                 <p role="status">{mediaMessage}</p>
                 {status === "error" && <Button size="sm" onClick={retryPlayback}>Retry playback</Button>}
               </div>}
@@ -335,15 +336,15 @@ export function SetEditDialog(props: Props) {
             </div>
             <section className="min-w-0 border-tf bg-white p-2" aria-labelledby="edit-laugh-timings">
               <div className="mb-2 grid grid-cols-[minmax(0,auto)_minmax(2.75rem,1fr)_auto] items-center gap-1 sm:gap-2">
-                <h3 id="edit-laugh-timings" className={styles.heading}>
+                <h3 id="edit-laugh-timings" className="text-[0.75rem] font-black tracking-[0.09em] uppercase">
                   Laugh timings
                   {selectedLaugh && <> <span aria-hidden="true" className="font-mono font-normal tracking-normal" title="Selected laugh intensity">
                     {intensityPercent(selectedLaugh.intensityScore)}%
                   </span></>}
                 </h3>
-                <label className={styles.zoom}>
+                <label className="grid w-[min(100%,7rem)] justify-self-end text-[0.6875rem] text-tf-ink-soft">
                   <span>Zoom</span>
-                  <input type="range" min={0} max={zoomSliderSteps} step={1}
+                  <input type="range" min={0} max={zoomSliderSteps} step={1} className="w-full min-w-0 accent-tf-blue"
                     value={zoomPosition} disabled={saving || dragWindow !== null || zoomFactor === 1}
                     aria-valuetext={`${Number(windowLength.toFixed(2))} seconds per window`}
                     onChange={event => {
@@ -366,13 +367,13 @@ export function SetEditDialog(props: Props) {
                   </Button>
                 </div>
               </div>
-              <div className={styles.strip} role="group" aria-label="Laugh timeline"
+              <div className="relative h-[4.25rem] cursor-crosshair touch-none border-tf-subtle select-none bg-[repeating-linear-gradient(90deg,var(--tf-paper-alt)_0_calc(12.5%_-_1px),#cdc6bc_0_12.5%)]" role="group" aria-label="Laugh timeline"
                 onPointerDown={beginDrag} onPointerMove={event => moveDrag(event)}
                 onPointerUp={event => moveDrag(event, true)} onLostPointerCapture={cancelDrag}>
-                {windowStart < 0 && <span aria-hidden="true" data-padding className={styles.padding}
-                  style={{ left: 0, width: `${percent(0)}%` }} />}
-                {windowEnd > duration && <span aria-hidden="true" data-padding className={styles.padding}
-                  style={{ left: `${percent(duration)}%`, right: 0 }} />}
+                {windowStart < 0 && <span aria-hidden="true" data-padding className={`${timelinePaddingClass} left-0`}
+                  style={{ width: `${percent(0)}%` }} />}
+                {windowEnd > duration && <span aria-hidden="true" data-padding className={`${timelinePaddingClass} right-0`}
+                  style={{ left: `${percent(duration)}%` }} />}
                 {laughs.map((laugh, index) => {
                   if (laugh.end <= playableStart || laugh.start >= playableEnd) return null;
                   const intensity = intensityPercent(laugh.intensityScore);
@@ -381,16 +382,19 @@ export function SetEditDialog(props: Props) {
                   const leftGap = left - percent(laughs[index - 1]?.end ?? playableStart);
                   const rightGap = percent(laughs[index + 1]?.start ?? playableEnd) - right;
                   return <div key={laugh.key} data-laugh={laugh.key} data-selected={laugh.key === selected}
-                    className={styles.laugh} style={{ left: `${left}%`, width: `${right - left}%` }}>
-                    <div role="slider" tabIndex={saving ? -1 : 0} className={styles.intensity}
+                    className="@container absolute inset-y-0 border border-[#704e07] bg-[#ffd966d9]
+                      [&:is([data-selected=true],:focus-within)]:z-1 [&:is([data-selected=true],:focus-within)]:bg-[#ffd966] [&:is([data-selected=true],:focus-within)]:shadow-[inset_0_0_0_2px_var(--tf-ink)]"
+                    style={{ left: `${left}%`, width: `${right - left}%` }}>
+                    <div role="slider" tabIndex={saving ? -1 : 0} className="absolute inset-0 cursor-ns-resize focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-tf-blue"
                       aria-label={`Laugh intensity at ${preciseTime(laugh.start)}`} aria-orientation="vertical"
                       aria-valuemin={0} aria-valuemax={100} aria-valuenow={intensity} aria-valuetext={`${intensity}%`}
                       aria-disabled={saving} onFocus={() => setSelected(laugh.key)}
                       onKeyDown={event => intensityKey(event, laugh)}>
-                      <span className={styles.intensityFill}
+                      <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-[color-mix(in_srgb,currentColor_48%,transparent)] shadow-[inset_0_2px_currentColor]"
                         style={{ height: `${intensity}%`, color: laughIntensityColor(laugh.intensityScore) }} />
                     </div>
-                    <button type="button" data-delete disabled={saving} className={styles.trash}
+                    <button type="button" data-delete disabled={saving} className="absolute top-1/2 left-1/2 grid size-[1.375rem] -translate-1/2 cursor-pointer place-items-center border-tf-subtle bg-[#fff5cc] [&:hover]:bg-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tf-blue
+                        @max-[2.75rem]:data-[side=left]:left-auto @max-[2.75rem]:data-[side=left]:right-[calc(100%+3px)] @max-[2.75rem]:translate-x-0 @max-[2.75rem]:data-[side=right]:left-[calc(100%+3px)]"
                       data-side={leftGap > rightGap ? "left" : "right"}
                       aria-label={`Remove laugh ${index + 1} at ${preciseTime(laugh.start)}`}
                       onClick={() => {
@@ -401,7 +405,9 @@ export function SetEditDialog(props: Props) {
                         startButton.current?.focus();
                       }}><Trash2 size={14} aria-hidden="true" /></button>
                     {(["start", "end"] as const).map(edge => laugh[edge] >= playableStart && laugh[edge] <= playableEnd &&
-                      <button key={edge} type="button" data-edge={edge} className={styles.handle} disabled={!canMark}
+                      <button key={edge} type="button" data-edge={edge} className="absolute grid h-[1.1875rem] w-3.5 place-items-center border-tf-subtle bg-tf-red
+                          enabled:cursor-ew-resize! focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tf-blue
+                          data-[edge=start]:top-0 data-[edge=start]:left-0 data-[edge=end]:right-0 data-[edge=end]:bottom-0" disabled={!canMark}
                         aria-label={`Resize laugh ${index + 1} ${edge}`} aria-keyshortcuts="ArrowLeft ArrowRight"
                         onFocus={() => setSelected(laugh.key)}
                         onKeyDown={event => {
@@ -412,30 +418,30 @@ export function SetEditDialog(props: Props) {
                         }} />)}
                   </div>;
                 })}
-                {preview && <div className={styles.preview}
+                {preview && <div className="pointer-events-none absolute inset-y-0 border border-dashed border-[#704e07] bg-[#ffd96684]"
                   style={{ left: `${percent(preview.start)}%`, width: `${percent(preview.end) - percent(preview.start)}%` }} />}
                 {(dragWindow === null || (currentTime >= windowStart && currentTime <= windowEnd)) &&
-                  <span className={styles.playhead} style={{ left: `${percent(currentTime)}%` }} />}
+                  <span className="pointer-events-none absolute inset-y-0 z-2 w-0.5 -translate-x-px bg-tf-red" style={{ left: `${percent(currentTime)}%` }} />}
               </div>
               {props.lines.length > 0 && <p className="my-2 text-xs text-tf-ink-soft">Drag to add or resize. Drag laughs up/down for intensity.</p>}
               <div className="flex items-center gap-1 sm:gap-2">
-                <Button ref={startButton} size="sm" variant="outline" className={styles.markButton}
+                <Button ref={startButton} size="sm" variant="outline" className={markButtonClass}
                   disabled={!canMark} aria-keyshortcuts="I" onClick={markStart}>Start laugh (I)</Button>
-                <Button size="sm" variant="outline" className={styles.markButton}
+                <Button size="sm" variant="outline" className={markButtonClass}
                   disabled={!canMark || mark === null} aria-keyshortcuts="O" onClick={markEnd}>End laugh (O)</Button>
-                <Button size="sm" variant="outline" className={`ml-auto ${styles.markButton}`}
+                <Button size="sm" variant="outline" className={`ml-auto ${markButtonClass}`}
                   disabled={!canSeek || !jumpTo}
                   onClick={() => { if (jumpTo) { seek(jumpTo.start); setSelected(jumpTo.key); } }}>Jump to laugh</Button>
               </div>
               <div className="mt-1 flex items-center gap-2 empty:hidden">
                 {feedback && <p className="text-xs text-tf-ink-soft" role="status">{feedback}</p>}
-                {mark !== null && <Button size="sm" variant="outline" className={styles.markButton}
+                {mark !== null && <Button size="sm" variant="outline" className={markButtonClass}
                   onClick={() => { setMark(null); setFeedback("Start cleared."); }}>Clear start</Button>}
               </div>
             </section>
           </section>
-          <section className={styles.transcript} aria-labelledby="edit-transcript">
-            <h3 id="edit-transcript" className={`${styles.heading} border-b border-tf-ink bg-tf-paper-alt p-2`}>Transcript</h3>
+          <section className="flex min-h-56 max-h-[clamp(20rem,65dvh,38rem)] flex-col border-tf bg-white [@media(max-width:760px)]:max-h-[22rem]" aria-labelledby="edit-transcript">
+            <h3 id="edit-transcript" className="text-[0.75rem] font-black tracking-[0.09em] uppercase border-b border-tf-ink bg-tf-paper-alt p-2">Transcript</h3>
             <TranscriptFields lines={props.lines} words={words} active={activeLine?.index} canSeek={canSeek}
               playing={playing} saving={saving} seek={seekToLine} changeWords={changeWords} />
           </section>
@@ -497,16 +503,17 @@ const TranscriptFields = memo(function TranscriptFields({ lines, words, active, 
     return () => cancelAnimationFrame(frame);
   }, [active, editing, playing]);
 
-  return <div ref={paneRef} className={styles.lines}>
+  return <div ref={paneRef} className="min-h-0 overflow-auto overscroll-contain [overflow-anchor:none]">
     {!lines.length && <p className="p-2 text-sm">No spoken words found.</p>}
     {lines.map((line, index) => (
       <div key={line.index} ref={line.index === active ? activeRowRef : undefined}
-        data-active={line.index === active} className={styles.line}>
+        data-active={line.index === active} className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-2 border-b border-b-tf-paper-alt p-2 data-[active=true]:bg-[#fff2ce] data-[active=true]:shadow-[inset_3px_0_var(--tf-accent-red)]">
         <Button variant="outline" size="sm" className="px-2 font-mono tracking-normal transition-none hover:translate-x-0 hover:translate-y-0 hover:shadow-none" disabled={!canSeek}
           aria-label={`Jump to Line ${index + 1} at ${formatReviewTime(line.start)}`} onClick={() => seek(line.start)}>
           {formatReviewTime(line.start)}
         </Button>
         <textarea
+          className="min-h-[3.4rem] w-full resize-y border border-[#a39b8e] bg-white p-[0.3rem] text-[0.875rem] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-tf-blue"
           aria-label={`Line ${index + 1} at ${formatReviewTime(line.start)}`}
           rows={line.text.length > 115 ? 4 : 2}
           value={words[line.index] ?? line.text}

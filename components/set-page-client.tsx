@@ -14,7 +14,6 @@ import { SetEditDialog } from "./set-edit-dialog";
 import { Button } from "./ui/button";
 import { useSetPlayback } from "./use-set-playback";
 import { useVerifiedSetArtifacts } from "./use-verified-dev-query";
-import styles from "./set-page-client.module.css";
 
 const emptyLines: TranscriptSentence[] = [];
 
@@ -162,8 +161,12 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
   }
 
   return (
-    <main className={styles.review} aria-label={dev ? "Set review DEV mode" : "Set review"}>
-      <header className={styles.heading}>
+    <main className="grid h-[calc(100dvh-3.875rem)] min-h-80 grid-cols-[minmax(17rem,28%)_minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-3 bg-tf-paper px-4 pt-3 pb-4 text-tf-ink [grid-template-areas:'heading_heading'_'left_right']
+      [@media(max-width:700px)]:min-h-[27rem] [@media(max-width:700px)]:grid-cols-1 [@media(max-width:700px)]:grid-rows-[auto_clamp(4rem,30dvh,20rem)_auto_auto_minmax(0,1fr)] [@media(max-width:700px)]:gap-2 [@media(max-width:700px)]:px-3 [@media(max-width:700px)]:[grid-template-areas:'heading'_'player'_'transport'_'laughs'_'transcript']
+      [@media(max-width:700px)_and_(max-height:520px)]:grid-rows-[auto_clamp(4rem,23dvh,8rem)_auto_auto_minmax(0,1fr)]" aria-label={dev ? "Set review DEV mode" : "Set review"}>
+      <header className={`flex min-h-9 items-center gap-3 [grid-area:heading]
+        [@media(max-width:700px)]:[&_h1]:[font-size:1rem] [@media(max-width:700px)]:[&_button]:max-w-[55%] [@media(max-width:700px)]:[&_button]:px-2 [@media(max-width:700px)]:[&_button]:tracking-[0.07em]
+        ${dev ? "flex-wrap" : ""}`}>
         <h1 className="min-w-0 break-words text-xl leading-tight font-black uppercase tracking-tf-tight sm:text-3xl">{set?.title}</h1>
         {set?.isOwner && (
           <Button ref={editTrigger} type="button" size="sm" variant="outline" className="ml-auto whitespace-normal text-center"
@@ -177,10 +180,10 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
           </Button>
         )}
         {dev && (
-          <div className={styles.devToolbar}>
-            <label className={styles.artifactField}>
-              <strong>DEV artifact</strong>
-              <select value={artifact?.id ?? ""} onChange={(event) => {
+          <div className="flex min-w-0 flex-[1_0_100%] flex-wrap items-center gap-2 border-tf bg-tf-paper-alt px-2 py-1.5 text-[0.75rem]">
+            <label className="flex min-w-0 max-w-full items-center gap-2">
+              <strong className="whitespace-nowrap">DEV artifact</strong>
+              <select className="min-w-0 border-tf-subtle bg-white px-1.5 py-1 [font-family:var(--font-mono),monospace]" value={artifact?.id ?? ""} onChange={(event) => {
                 const id = event.currentTarget.value;
                 const next = artifacts?.find((item) => item.id === id);
                 if (next && !["audio", "video"].includes(artifactType(next))) pausePlayback();
@@ -209,8 +212,8 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
         }}
       />}
 
-      <div className={styles.playbackColumn}>
-        <section className={`${styles.player} border-tf shadow-tf-card`} aria-label="Set player">
+      <div className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] gap-3 [grid-area:right] [@media(max-width:700px)]:contents">
+        <section className="relative min-h-0 overflow-hidden border-tf bg-tf-ink shadow-tf-card [@media(max-width:700px)]:[grid-area:player]" aria-label="Set player">
           {showPreview ? <SetArtifactPreview key={artifact.id} setId={setId} artifact={artifact} /> :
             selectedType === "audio" ? (
               <div className="grid size-full place-items-center p-3 text-white">
@@ -224,7 +227,7 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
             </span>
           )}
           {!showPreview && playerMessage && (
-            <div className={status === "buffering" ? styles.buffering : styles.playerMessage}>
+            <div className={`absolute grid justify-items-center gap-2 ${status === "buffering" ? "pointer-events-none bottom-2 left-2" : "inset-0 place-content-center"}`}>
               <p role="status" className="bg-tf-paper px-3 py-2 font-mono text-xs text-tf-ink">{playerMessage}</p>
               {status === "error" && (
                 <Button size="sm" type="button" onClick={retryPlayback}>Retry playback</Button>
@@ -233,14 +236,14 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
           )}
         </section>
 
-        <section className={`${styles.transport} border-tf bg-white shadow-tf-card`} aria-label="Playback controls">
+        <section className="flex items-center gap-1.5 border-tf bg-white px-1 py-0.5 shadow-tf-card [@media(max-width:700px)]:[grid-area:transport]" aria-label="Playback controls">
           <Button size="icon" type="button" disabled={!canSeek} onClick={togglePlayback}
             aria-label={playing ? "Pause" : "Play"}>
             {playing ? <Pause aria-hidden="true" /> : <Play aria-hidden="true" />}
           </Button>
           <span className="whitespace-nowrap font-mono text-[10px]">{formatTime(currentTime)} / {formatTime(duration)}</span>
-          <div className={styles.timeline}>
-            <div className={styles.timelineTrack} aria-hidden="true">
+          <div className="relative min-w-0 flex-1 px-[calc(var(--playhead-width)/2)] [--playhead-width:12px] focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-tf-red">
+            <div className="relative h-[1.375rem] overflow-hidden border-tf-subtle bg-tf-paper-alt" aria-hidden="true">
               {duration > 0 && timelineLaughs.map((laugh) => (
                 <span key={laugh.index} className="absolute inset-y-0 min-w-px" style={{
                   left: `${100 * laugh.start_time / duration}%`,
@@ -249,19 +252,22 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
                 }} />
               ))}
             </div>
-            <div className={styles.playheadRail} aria-hidden="true">
-              <span className={styles.playhead}
+            <div className="pointer-events-none absolute inset-y-0 inset-x-[calc(var(--playhead-width)/2)]" aria-hidden="true">
+              <span className="absolute -inset-y-[3px] w-(--playhead-width) -translate-x-1/2 bg-tf-ink [clip-path:polygon(0_0,100%_0,64%_7px,64%_100%,36%_100%,36%_7px)] drop-shadow-[0_0_1px_var(--tf-white)]"
                 style={{ left: `${duration ? 100 * currentTime / duration : 0}%` }} />
             </div>
-            <input aria-label="Set timeline" aria-valuetext={formatTime(currentTime)} type="range"
+            <input className="absolute inset-0 m-0 size-full cursor-ew-resize appearance-none opacity-0 disabled:cursor-default
+                [&::-webkit-slider-thumb]:h-full [&::-webkit-slider-thumb]:w-(--playhead-width) [&::-webkit-slider-thumb]:appearance-none
+                [&::-moz-range-thumb]:w-(--playhead-width) [&::-moz-range-thumb]:border-0"
+              aria-label="Set timeline" aria-valuetext={formatTime(currentTime)} type="range"
               min={0} max={duration} step="any" value={currentTime} disabled={!canSeek}
               onChange={(event) => seek(event.currentTarget.valueAsNumber)} />
           </div>
         </section>
       </div>
 
-      <div className={styles.transcriptColumn}>
-        <section className={`${styles.transcript} border-tf bg-white shadow-tf-card`} aria-labelledby="transcript-heading">
+      <div className="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] gap-3 [grid-area:left] [@media(max-width:700px)]:contents">
+        <section className="flex min-h-0 min-w-0 flex-col border-tf bg-white shadow-tf-card [@media(max-width:700px)]:[grid-area:transcript]" aria-labelledby="transcript-heading">
           <header className="border-b-2 border-tf-ink bg-tf-paper-alt p-2">
             <h2 id="transcript-heading" className="mb-1 text-xs font-black uppercase tracking-tf-ui">Transcript</h2>
             <div className="flex flex-wrap gap-1.5">
@@ -273,7 +279,7 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
               </Button>
             </div>
           </header>
-          <div className={styles.lines} ref={scrollPane} data-follow={follow}
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain [container-type:size] [overflow-anchor:none] data-[follow=true]:has-[button]:after:block data-[follow=true]:has-[button]:after:h-[100cqh]" ref={scrollPane} data-follow={follow}
             onWheel={() => setFollow(false)} onTouchMove={() => setFollow(false)}
             onScroll={(event) => {
               if (Math.abs(event.currentTarget.scrollTop - expectedScroll.current) > 1) setFollow(false);
@@ -283,7 +289,8 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
               const hasLaugh = line.laughs.length > 0;
               const active = hasPlayedSource && line.index === activeLine?.index;
               return (
-                <button key={line.index} className={styles.line} type="button" disabled={!canSeek}
+                <button key={line.index} className="block w-full border-b border-b-tf-paper-alt px-2 py-1.5 text-left text-[0.8125rem]/[1.35] wrap-anywhere
+                  [&:hover:not(:disabled)]:bg-tf-paper-alt aria-[current]:bg-tf-paper-alt aria-[current]:shadow-[inset_3px_0_var(--tf-accent-red)] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-tf-red" type="button" disabled={!canSeek}
                   ref={line.index === activeLine?.index ? activeRow : undefined} aria-current={active ? "true" : undefined}
                   onClick={() => seek(line.start)}>
                   <span className="flex gap-2">
@@ -305,7 +312,7 @@ export default function SetPageClient({ setId, devArtifacts }: { setId: string; 
           </div>
         </section>
 
-        <section className={`${styles.laughNavigation} border-tf bg-white px-2 pt-1 pb-2 shadow-tf-card`} aria-label="Laugh navigation">
+        <section className="border-tf bg-white px-2 pt-1 pb-2 shadow-tf-card [@media(max-width:700px)]:[grid-area:laughs]" aria-label="Laugh navigation">
           <p role="status" className="flex min-h-7 items-center font-mono text-[10px] leading-tight text-tf-ink-soft">{laughMessage}</p>
           <div className="grid grid-cols-2 gap-2">
             <Button size="sm" type="button" variant="outline" className="min-w-0 gap-1 px-1 tracking-normal"
